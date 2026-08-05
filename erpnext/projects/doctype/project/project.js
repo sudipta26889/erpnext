@@ -52,7 +52,7 @@ frappe.ui.form.on("Project", {
 				);
 
 				frm.add_custom_button(
-					__("Kanban Board"),
+					__("View Tasks"),
 					() => {
 						// ponytail: routes to the plain filtered Task list, not the Kanban
 						// view itself — KanbanView.show() unconditionally resets

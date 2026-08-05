@@ -90,3 +90,30 @@ class TestVirtualProject(IntegrationTestCase):
 		c = _mock_client(mock_get_client)
 		c.get_project.side_effect = TaskPilotNotFound("not found")
 		self.assertRaises(frappe.DoesNotExistError, frappe.get_doc, "Project", "NOPE")
+
+	def test_negative_status_filter_is_ignored(self, mock_get_client):
+		c = _mock_client(mock_get_client)
+		archived = dict(fixtures.PROJECT, identifier="ARCHIVED", archived_at="2026-08-01T00:00:00Z")
+		c.list_projects.return_value = [fixtures.PROJECT, archived]
+		from erpnext.projects.doctype.project.project import Project
+
+		# != operator is unsupported; both rows should be returned (no filtering)
+		args = {"filters": [["Project", "status", "!=", "Cancelled"]], "page_length": 20}
+		rows = Project.get_list(args)
+		self.assertEqual(len(rows), 2)
+
+	def test_get_list_aggregate_count(self, mock_get_client):
+		c = _mock_client(mock_get_client)
+		archived = dict(fixtures.PROJECT, identifier="ARCHIVED", archived_at="2026-08-01T00:00:00Z")
+		c.list_projects.return_value = [fixtures.PROJECT, archived]
+		from erpnext.projects.doctype.project.project import Project
+
+		# COUNT aggregate with alias "count"
+		args = {"fields": [{"COUNT": "*", "as": "count"}], "filters": []}
+		result = Project.get_list(args)
+		self.assertEqual(result, [{"count": 2}])
+
+		# COUNT aggregate when disabled
+		with patch("erpnext.projects.doctype.project.project.is_enabled", return_value=False):
+			result = Project.get_list(args)
+			self.assertEqual(result, [{"count": 0}])

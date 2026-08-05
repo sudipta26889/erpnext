@@ -16,16 +16,12 @@ class Project(Document):
 
 	def load_from_db(self):
 		if not is_enabled():
-			frappe.throw(
-				_("Project {0} not found").format(self.name), frappe.DoesNotExistError(doctype=self.doctype)
-			)
+			raise frappe.DoesNotExistError(f"Project {self.name} not found")
 		client = get_client()
 		try:
 			tp_project = client.get_project(self.name)
 		except TaskPilotNotFound:
-			frappe.throw(
-				_("Project {0} not found").format(self.name), frappe.DoesNotExistError(doctype=self.doctype)
-			)
+			raise frappe.DoesNotExistError(f"Project {self.name} not found")
 		d = tp_to_project(tp_project)
 		d.update(compute_financials(self.name))
 		d["percent_complete"] = compute_percent_complete(self.name, client=client)
@@ -36,12 +32,7 @@ class Project(Document):
 		payload = project_to_payload(self)
 		if not payload.get("identifier"):
 			payload["identifier"] = make_identifier(self.project_name)
-		try:
-			created = client.create_project(payload)
-		except TaskPilotError:
-			# ponytail: identifier collision, retry once with a numeric suffix
-			payload["identifier"] = payload["identifier"][:8] + "2"
-			created = client.create_project(payload)
+		created = client.create_project(payload)
 		self.name = created["identifier"]
 
 	def db_update(self, *args, **kwargs):
@@ -57,6 +48,21 @@ class Project(Document):
 
 	@staticmethod
 	def get_list(args):
+		# Check for aggregate COUNT fields (e.g., {"COUNT": "*", "as": "count"})
+		fields = args.get("fields") or []
+		aggregate_spec = None
+		for field in fields:
+			if isinstance(field, dict):
+				aggregate_spec = field
+				break
+
+		if aggregate_spec:
+			alias = aggregate_spec.get("as") or "result"
+			if not is_enabled():
+				return [{alias: 0}]
+			count = len(_matching_rows(args))
+			return [{alias: count}]
+
 		if not is_enabled():
 			return []
 		rows = _matching_rows(args)
@@ -133,7 +139,13 @@ def _like_value(args, fieldnames: tuple) -> str | None:
 def _status_values(args) -> list | None:
 	for fieldname, operator, value in _normalized_filters(args):
 		if fieldname == "status":
-			return list(value) if operator == "in" else [value]
+			if operator == "in":
+				return list(value)
+			elif operator == "=":
+				return [value]
+			else:
+				# ponytail: operators like !=, not in, etc. unsupported; return None (no filter)
+				return None
 	return None
 
 
