@@ -39,4 +39,4 @@ WORK_ITEM = {
 	"updated_at": "2026-08-05T09:30:00Z",
 }
 
-MEMBERS = [{"id": "u-1", "email": "sudiptai26.889@gmail.com", "display_name": "Sudipta"}]
+MEMBERS = [{"id": "u-1", "email": "member@example.com", "display_name": "Test Member"}]
