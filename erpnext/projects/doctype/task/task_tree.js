@@ -18,7 +18,7 @@ frappe.treeview_settings["Task"] = {
 			get_query: function () {
 				var me = frappe.treeview_settings["Task"];
 				var project = me.page.fields_dict.project.get_value();
-				var args = [["Task", "is_group", "=", 1]];
+				var args = [];
 				if (project) {
 					args.push(["Task", "project", "=", project]);
 				}

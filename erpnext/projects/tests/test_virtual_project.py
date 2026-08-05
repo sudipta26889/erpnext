@@ -102,6 +102,19 @@ class TestVirtualProject(IntegrationTestCase):
 		rows = Project.get_list(args)
 		self.assertEqual(len(rows), 2)
 
+	def test_get_list_as_list_for_link_search(self, mock_get_client):
+		_mock_client(mock_get_client)
+		from erpnext.projects.doctype.project.project import Project
+
+		rows = Project.get_list(
+			{
+				"or_filters": [["Project", "project_name", "like", "%revamp%"]],
+				"as_list": True,
+				"page_length": 20,
+			}
+		)
+		self.assertEqual(rows, [["WEBSITE", "Website Revamp"]])
+
 	def test_get_list_aggregate_count(self, mock_get_client):
 		c = _mock_client(mock_get_client)
 		archived = dict(fixtures.PROJECT, identifier="ARCHIVED", archived_at="2026-08-01T00:00:00Z")

@@ -68,9 +68,38 @@ class TestVirtualTask(IntegrationTestCase):
 		)
 		self.assertEqual([r.name for r in rows], ["WEBSITE-12"])
 
+		# negative: the fixture's only item is Working, so filtering for Completed finds nothing
+		rows = Task.get_list(
+			{
+				"filters": [["Task", "project", "=", "WEBSITE"], ["Task", "status", "=", "Completed"]],
+				"page_length": 20,
+			}
+		)
+		self.assertEqual(rows, [])
+
 	@patch("erpnext.projects.doctype.task.task.is_enabled", return_value=False)
 	def test_get_list_aggregate_count_disabled(self, mock_is_enabled, mock_get_client):
 		from erpnext.projects.doctype.task.task import Task
 
 		rows = Task.get_list({"fields": [{"COUNT": "*", "as": "count"}], "filters": []})
 		self.assertEqual(rows[0].count, 0)
+
+	def test_get_list_aggregate_count_enabled(self, mock_get_client):
+		_mock(mock_get_client)
+		from erpnext.projects.doctype.task.task import Task
+
+		rows = Task.get_list({"fields": [{"COUNT": "*", "as": "count"}], "filters": []})
+		self.assertEqual(rows[0].count, 1)
+
+	def test_get_list_as_list_for_link_search(self, mock_get_client):
+		_mock(mock_get_client)
+		from erpnext.projects.doctype.task.task import Task
+
+		rows = Task.get_list(
+			{
+				"or_filters": [["Task", "subject", "like", "%homepage%"]],
+				"as_list": True,
+				"page_length": 20,
+			}
+		)
+		self.assertEqual(rows, [["WEBSITE-12", "Design homepage"]])

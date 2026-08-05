@@ -39,9 +39,9 @@ class Task(Document):
 		self.validate_from_to_dates("exp_start_date", "exp_end_date")
 
 	def db_insert(self, *args, **kwargs):
-		client = get_client()
 		if not self.project:
 			frappe.throw(_("Task needs a Project (TaskPilot work items live inside a project)."))
+		client = get_client()
 		created = client.create_work_item(self.project, self._payload(client))
 		self.name = f"{self.project}-{created['sequence_id']}"
 
@@ -64,7 +64,11 @@ class Task(Document):
 			name, group = STATUS_TO_STATE.get(self.status, ("Todo", "unstarted"))
 			state_id = client.ensure_state(project_identifier, name, group)["id"]
 		parent_uuid = client.get_work_item(self.parent_task)["id"] if self.parent_task else None
-		return task_to_work_item_payload(self, state_id=state_id, parent_uuid=parent_uuid)
+		payload = task_to_work_item_payload(self, state_id=state_id, parent_uuid=parent_uuid)
+		# task_to_work_item_payload only sets "parent" when parent_uuid is truthy (PATCH semantics
+		# would then silently keep the old parent); set it unconditionally so None unparents.
+		payload["parent"] = parent_uuid
+		return payload
 
 	@staticmethod
 	def get_list(args):
@@ -88,7 +92,12 @@ class Task(Document):
 		rows = _matching_rows(args)
 		start = int(args.get("start") or args.get("limit_start") or 0)
 		length = int(args.get("page_length") or args.get("limit_page_length") or 20)
-		return rows[start : start + length]
+		rows = rows[start : start + length]
+		if args.get("as_list"):
+			# frappe.desk.search calls get_list(as_list=True) for link-field dropdowns
+			# (e.g. Task.parent_task) and indexes the result positionally.
+			return [[r.name, r.subject] for r in rows]
+		return rows
 
 	@staticmethod
 	def get_count(args):
@@ -131,7 +140,11 @@ def _matching_rows(args) -> list:
 		wanted = {(p or "") for p in parents}
 		rows = [r for r in rows if (r.parent_task or "") in wanted]
 
-	subject = _like_value(args, ("subject", "name"))
+	# frappe.desk.search's link-field dropdown (e.g. Task.parent_task) sends the typed
+	# text via or_filters, not filters; fall back to it the same way _like_value reads filters.
+	subject = _like_value(args.get("filters"), ("subject", "name")) or _like_value(
+		args.get("or_filters"), ("subject", "name")
+	)
 	if subject:
 		needle = subject.lower()
 		rows = [r for r in rows if needle in (r.subject or "").lower() or needle in r.name.lower()]
@@ -139,14 +152,14 @@ def _matching_rows(args) -> list:
 	return rows
 
 
-def _normalized_filters(args):
+def _normalized_filters(filters):
 	"""Yield (fieldname, operator, value) from frappe's list/dict filter shapes.
 
 	List rows come as either [fieldname, operator, value] or
 	[doctype, fieldname, operator, value]; anything shorter or longer is
 	not a recognized shape and is skipped rather than guessed at.
 	"""
-	filters = args.get("filters") or []
+	filters = filters or []
 	if isinstance(filters, dict):
 		for k, v in filters.items():
 			if isinstance(v, (list, tuple)) and len(v) == 2:
@@ -163,7 +176,7 @@ def _normalized_filters(args):
 
 def _values(args, fieldname: str) -> list | None:
 	"""Wanted values for `fieldname` from a = or in filter; None means no filter."""
-	for fname, operator, value in _normalized_filters(args):
+	for fname, operator, value in _normalized_filters(args.get("filters")):
 		if fname != fieldname:
 			continue
 		if operator == "=":
@@ -176,8 +189,8 @@ def _values(args, fieldname: str) -> list | None:
 	return None
 
 
-def _like_value(args, fieldnames: tuple) -> str | None:
-	for fieldname, operator, value in _normalized_filters(args):
+def _like_value(filters, fieldnames: tuple) -> str | None:
+	for fieldname, operator, value in _normalized_filters(filters):
 		if fieldname in fieldnames and operator in ("like", "="):
 			return str(value).strip("%")
 	return None
@@ -246,7 +259,9 @@ def set_multiple_status(names: str | list, status: str):
 
 
 @frappe.whitelist()
-def make_timesheet(source_name: str, target_doc=None, ignore_permissions: bool = False):
+def make_timesheet(
+	source_name: str, target_doc: str | dict | Document | None = None, ignore_permissions: bool = False
+):
 	def set_missing_values(source, target):
 		target.parent_project = source.project
 		target.append("time_logs", {"project": source.project, "task": source.name})

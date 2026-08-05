@@ -70,7 +70,12 @@ class Project(Document):
 		rows = _matching_rows(args)
 		start = int(args.get("start") or args.get("limit_start") or 0)
 		length = int(args.get("page_length") or args.get("limit_page_length") or 20)
-		return rows[start : start + length]
+		rows = rows[start : start + length]
+		if args.get("as_list"):
+			# frappe.desk.search calls get_list(as_list=True) for link-field dropdowns
+			# and indexes the result positionally.
+			return [[r.name, r.project_name] for r in rows]
+		return rows
 
 	@staticmethod
 	def get_count(args):
@@ -98,7 +103,11 @@ def compute_percent_complete(project: str, client=None) -> float:
 def _matching_rows(args) -> list:
 	client = get_client()
 	rows = [tp_to_project(p) for p in client.list_projects()]
-	txt = _like_value(args, ("name", "project_name"))
+	# frappe.desk.search's link-field dropdown sends the typed text via or_filters,
+	# not filters; fall back to it the same way _like_value reads filters.
+	txt = _like_value(args.get("filters"), ("name", "project_name")) or _like_value(
+		args.get("or_filters"), ("name", "project_name")
+	)
 	if txt:
 		rows = [
 			r for r in rows if txt.lower() in (r.project_name or "").lower() or txt.lower() in r.name.lower()
@@ -109,14 +118,14 @@ def _matching_rows(args) -> list:
 	return rows
 
 
-def _normalized_filters(args):
+def _normalized_filters(filters):
 	"""Yield (fieldname, operator, value) from frappe's list/dict filter shapes.
 
 	List rows come as either [fieldname, operator, value] or
 	[doctype, fieldname, operator, value]; anything shorter or longer is
 	not a recognized shape and is skipped rather than guessed at.
 	"""
-	filters = args.get("filters") or []
+	filters = filters or []
 	if isinstance(filters, dict):
 		for k, v in filters.items():
 			if isinstance(v, (list, tuple)) and len(v) == 2:
@@ -131,15 +140,15 @@ def _normalized_filters(args):
 			yield (f[1], f[2], f[3])
 
 
-def _like_value(args, fieldnames: tuple) -> str | None:
-	for fieldname, operator, value in _normalized_filters(args):
+def _like_value(filters, fieldnames: tuple) -> str | None:
+	for fieldname, operator, value in _normalized_filters(filters):
 		if fieldname in fieldnames and operator in ("like", "="):
 			return str(value).strip("%")
 	return None
 
 
 def _status_values(args) -> list | None:
-	for fieldname, operator, value in _normalized_filters(args):
+	for fieldname, operator, value in _normalized_filters(args.get("filters")):
 		if fieldname == "status":
 			if operator == "in":
 				return list(value)

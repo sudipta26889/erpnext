@@ -8,7 +8,6 @@ frappe.views.calendar["Task"] = {
 		id: "name",
 		title: "subject",
 		allDay: "allDay",
-		progress: "progress",
 	},
 	gantt: true,
 	filters: [
