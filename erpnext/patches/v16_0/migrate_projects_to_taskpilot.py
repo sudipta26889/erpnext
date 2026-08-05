@@ -88,16 +88,25 @@ def _check_identifier_collisions(rows, existing, taken):
 	already taken by a non-migrated TaskPilot project.
 	"""
 	by_identifier = {}
+	workspace_collisions = []
 	for row in rows:
 		if row.name in existing:
 			continue
 		identifier = make_identifier(row.project_name)
 		by_identifier.setdefault(identifier, []).append(row.name)
 		if identifier in taken:
-			frappe.throw(
-				f"Project '{row.project_name}' would map to identifier '{identifier}', "
-				f"which is already used by a non-migrated TaskPilot workspace"
-			)
+			workspace_collisions.append((row.project_name, identifier))
+
+	if workspace_collisions:
+		# Cap message to 20 collisions + count of remainder
+		shown = workspace_collisions[:20]
+		remainder = len(workspace_collisions) - 20
+		details = "; ".join(f"{name} -> '{identifier}'" for name, identifier in shown)
+		if remainder > 0:
+			details += f"; and {remainder} more"
+		frappe.throw(
+			f"Projects would collide with non-migrated TaskPilot projects - rename before migrating: {details}"
+		)
 
 	collisions = {identifier: names for identifier, names in by_identifier.items() if len(names) > 1}
 	if collisions:
@@ -245,8 +254,11 @@ def _remap_links(project_map, task_map):
 
 
 def _remap(doctype, column, mapping):
-	# ponytail: per-(table × column × project) UPDATEs across ~57 derived tables, unindexed on project;
-	# upgrade path = single CASE-expression UPDATE per column or temp mapping table join, if migration volume demands it.
+	# ponytail: _remap generates per-(table x column x project) UPDATEs across ~43 Link fields;
+	# _remap_dynamic adds per-(table x type_col x type_value) UPDATEs across ~112 Dynamic Link field
+	# entries + 3 Data-column stragglers, each x 2 type_values (Project/Task), mostly filtered to
+	# zero rows by the type predicate (GL Entry/Payment Entry refs). Upgrade path if volume demands:
+	# single CASE-expression UPDATE per column or temp mapping table join.
 	if not frappe.db.table_exists(doctype):
 		return
 	table = frappe.qb.DocType(doctype)
@@ -256,10 +268,10 @@ def _remap(doctype, column, mapping):
 
 
 def _remap_dynamic(doctype_name, mapping, type_col, name_col, type_value):
-	"""Remap docnames stored in generic (type, name) reference columns - `tabToDo.reference_name`,
-	`tabComment.reference_name`, `tabFile.attached_to_name`, `tabVersion.docname`,
-	`tabDynamic Link.link_name` - which aren't Link fields, so `_link_columns` can't find them and
-	the docname would otherwise orphan silently once the old Project/Task docname stops resolving.
+	"""Remap docnames stored in generic (type, name) reference columns - e.g. `tabToDo.reference_name`,
+	`tabComment.reference_name`, etc. - which aren't Link fields, so `_link_columns` can't find them and
+	the docname would otherwise orphan silently once the old Project/Task docname stops resolving. Caller
+	(see _get_dynamic_ref_tables) provides the table, type_col, name_col mapping.
 	"""
 	if not mapping or not frappe.db.table_exists(doctype_name):
 		return

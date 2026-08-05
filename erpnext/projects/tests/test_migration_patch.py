@@ -47,7 +47,9 @@ class TestPushProjectsIdempotency(IntegrationTestCase):
 				frappe.db.commit()
 
 			self.addCleanup(_cleanup)
-			project_map = patch_module._push_projects(client, existing={"TEST-MIGRATION-PROJ": "EXISTINGID"}, taken=set())
+			project_map = patch_module._push_projects(
+				client, existing={"TEST-MIGRATION-PROJ": "EXISTINGID"}, taken=set()
+			)
 		else:
 			# ponytail: tables already gone (a prior run of this module, or `bench migrate`, already
 			# dropped them) - same code path, fed an in-memory row instead of a real SQL select.
@@ -259,6 +261,13 @@ class TestRemapLinks(IntegrationTestCase):
 		self.assertEqual(frappe.db.get_value("ToDo", "TEST-MIGRATION-TODO-PROJ", "reference_name"), "NEWPROJ")
 		# reference_type="Task" row was not touched by the "Project" remap despite the same name
 		self.assertEqual(frappe.db.get_value("ToDo", "TEST-MIGRATION-TODO-TASK", "reference_name"), "OLDPROJ")
+
+	def test_dynamic_ref_tables_derives_correct_tuple_order(self):
+		"""_get_dynamic_ref_tables returns (doctype, type_col, name_col) tuples in correct order for
+		use by _remap_dynamic. Verify a known Dynamic Link table is present."""
+		dynamic_tables = patch_module._get_dynamic_ref_tables()
+		# ToDo's reference_name is a Dynamic Link field with options pointing to reference_type
+		self.assertIn(("ToDo", "reference_type", "reference_name"), dynamic_tables)
 
 
 class TestShortCircuitDropsEmptyTables(IntegrationTestCase):
