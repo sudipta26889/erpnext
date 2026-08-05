@@ -47,7 +47,7 @@ class TestPushProjectsIdempotency(IntegrationTestCase):
 				frappe.db.commit()
 
 			self.addCleanup(_cleanup)
-			project_map = patch_module._push_projects(client, existing={"TEST-MIGRATION-PROJ": "EXISTINGID"})
+			project_map = patch_module._push_projects(client, existing={"TEST-MIGRATION-PROJ": "EXISTINGID"}, taken=set())
 		else:
 			# ponytail: tables already gone (a prior run of this module, or `bench migrate`, already
 			# dropped them) - same code path, fed an in-memory row instead of a real SQL select.
@@ -56,7 +56,7 @@ class TestPushProjectsIdempotency(IntegrationTestCase):
 			)
 			with patch.object(frappe.db, "sql", return_value=[row]):
 				project_map = patch_module._push_projects(
-					client, existing={"TEST-MIGRATION-PROJ": "EXISTINGID"}
+					client, existing={"TEST-MIGRATION-PROJ": "EXISTINGID"}, taken=set()
 				)
 
 		client.create_project.assert_not_called()
@@ -67,7 +67,7 @@ class TestPushProjectsIdempotency(IntegrationTestCase):
 		client = _mock_client()
 		row = frappe._dict(name="OLD-PROJ", project_name="Fresh Proj", notes="<p>n</p>", status="Completed")
 		with patch.object(frappe.db, "sql", return_value=[row]):
-			project_map = patch_module._push_projects(client, existing={})
+			project_map = patch_module._push_projects(client, existing={}, taken=set())
 
 		client.create_project.assert_called_once()
 		payload = client.create_project.call_args[0][0]
@@ -89,7 +89,21 @@ class TestPushProjectsIdempotency(IntegrationTestCase):
 		frappe.get_meta("System Settings")
 		with patch.object(frappe.db, "sql", return_value=rows):
 			with self.assertRaises(frappe.ValidationError):
-				patch_module._push_projects(client, existing={})
+				patch_module._push_projects(client, existing={}, taken=set())
+
+		client.create_project.assert_not_called()
+
+	def test_workspace_collision_throws_before_any_push(self):
+		"""A legacy project whose computed identifier conflicts with an existing (non-migrated)
+		TaskPilot workspace must abort before any push."""
+		client = _mock_client()
+		rows = [
+			frappe._dict(name="LEGACY-WEBSITEREV", project_name="Website Review", notes=None, status="Open"),
+		]
+		frappe.get_meta("System Settings")
+		with patch.object(frappe.db, "sql", return_value=rows):
+			with self.assertRaises(frappe.ValidationError):
+				patch_module._push_projects(client, existing={}, taken={"WEBSITEREV"})
 
 		client.create_project.assert_not_called()
 
@@ -210,6 +224,7 @@ class TestRemapLinks(IntegrationTestCase):
 		columns = patch_module._link_columns("Project")
 
 		self.assertIn(("Issue", "project"), columns)
+		self.assertIn(("Sales Taxes and Charges", "project"), columns)
 		doctypes = {doctype for doctype, _ in columns}
 		self.assertNotIn("Project", doctypes)
 		self.assertNotIn("Task", doctypes)

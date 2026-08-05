@@ -11,16 +11,6 @@ from erpnext.projects.taskpilot_mapping import (
 	task_to_work_item_payload,
 )
 
-# Generic (polymorphic) reference tables that link by a (type, name) column pair instead of a
-# dedicated Link field, so `_link_columns` metadata lookup can't see them - see _remap_dynamic.
-DYNAMIC_REF_TABLES = [
-	("ToDo", "reference_type", "reference_name"),
-	("Comment", "reference_doctype", "reference_name"),
-	("File", "attached_to_doctype", "attached_to_name"),
-	("Version", "ref_doctype", "docname"),
-	("Dynamic Link", "link_doctype", "link_name"),
-]
-
 
 def execute():
 	if not frappe.db.table_exists("Project") and not frappe.db.table_exists("Task"):
@@ -34,9 +24,11 @@ def execute():
 		frappe.throw("Configure and enable TaskPilot Settings before running this migration.")
 
 	client = get_client()
-	existing = {p.get("external_id"): p["identifier"] for p in client.list_projects() if p.get("external_id")}
+	projects = client.list_projects()
+	existing = {p.get("external_id"): p["identifier"] for p in projects if p.get("external_id")}
+	taken = {p["identifier"] for p in projects if not p.get("external_id")}
 
-	project_map = _push_projects(client, existing)
+	project_map = _push_projects(client, existing, taken)
 	task_map = _push_tasks(client, project_map)
 	_remap_links(project_map, task_map)
 
@@ -68,9 +60,9 @@ def _drop_empty_legacy_tables() -> bool:
 	return True
 
 
-def _push_projects(client, existing) -> dict:
+def _push_projects(client, existing, taken) -> dict:
 	rows = frappe.db.sql("select name, project_name, notes, status from `tabProject`", as_dict=True)
-	_check_identifier_collisions(rows, existing)
+	_check_identifier_collisions(rows, existing, taken)
 
 	project_map = {}
 	for row in rows:
@@ -87,21 +79,35 @@ def _push_projects(client, existing) -> dict:
 	return project_map
 
 
-def _check_identifier_collisions(rows, existing):
+def _check_identifier_collisions(rows, existing, taken):
 	"""Two legacy projects whose names collapse to the same TaskPilot identifier (make_identifier
 	strips non-alphanumerics and truncates to 10 chars) would silently overwrite one another in
 	TaskPilot - abort the whole push before anything is created so the user can rename first.
 	Rows already migrated (their docname is in `existing`) are not being pushed, so they can't
-	collide with anything and are excluded from the check.
+	collide with anything and are excluded from the check. Also fail if a computed identifier is
+	already taken by a non-migrated TaskPilot project.
 	"""
 	by_identifier = {}
 	for row in rows:
 		if row.name in existing:
 			continue
-		by_identifier.setdefault(make_identifier(row.project_name), []).append(row.name)
+		identifier = make_identifier(row.project_name)
+		by_identifier.setdefault(identifier, []).append(row.name)
+		if identifier in taken:
+			frappe.throw(
+				f"Project '{row.project_name}' would map to identifier '{identifier}', "
+				f"which is already used by a non-migrated TaskPilot workspace"
+			)
+
 	collisions = {identifier: names for identifier, names in by_identifier.items() if len(names) > 1}
 	if collisions:
-		details = "; ".join(f"{identifier}: {', '.join(names)}" for identifier, names in collisions.items())
+		# Cap message to 20 collisions + count of remainder
+		collision_items = list(collisions.items())
+		shown = collision_items[:20]
+		remainder = len(collision_items) - 20
+		details = "; ".join(f"{identifier}: {', '.join(names)}" for identifier, names in shown)
+		if remainder > 0:
+			details += f"; and {remainder} more identifier(s)"
 		frappe.throw(
 			f"Multiple projects share the same TaskPilot identifier - rename before migrating: {details}"
 		)
@@ -178,10 +184,40 @@ def _check_orphan_tasks(rows, project_map):
 	DROP TABLE at the end of execute() - rather than silently dropping it on the floor."""
 	orphans = [(row.name, row.project) for row in rows if row.project not in project_map]
 	if orphans:
-		listing = ", ".join(f"{name} (project: {project})" for name, project in orphans)
+		# Cap message to 20 orphans + count of remainder
+		shown = orphans[:20]
+		remainder = len(orphans) - 20
+		listing = ", ".join(f"{name} (project: {project})" for name, project in shown)
+		if remainder > 0:
+			listing += f", and {remainder} more"
 		frappe.throw(
 			f"{len(orphans)} task(s) reference an unmigrated project - fix before migrating: {listing}"
 		)
+
+
+def _get_dynamic_ref_tables() -> list[tuple[str, str, str]]:
+	"""Derive dynamic reference table mappings from DocField metadata, plus hardcoded Data-column
+	stragglers that use Text/Data fields instead of Dynamic Link fieldtype.
+
+	Returns: list of (doctype, type_col, name_col) tuples for polymorphic references.
+	"""
+	# Dynamic Link fields detected via metadata
+	dynamic_links = frappe.get_all(
+		"DocField",
+		filters={"fieldtype": "Dynamic Link"},
+		fields=["parent as doctype", "fieldname", "options as type_col"],
+	)
+	tables = [(row.doctype, row.type_col, row.fieldname) for row in dynamic_links]
+
+	# Data-column stragglers that use Text/Data fields instead of Dynamic Link fieldtype
+	DATA_COLUMN_STRAGGLERS = [
+		("File", "attached_to_doctype", "attached_to_name"),
+		("Version", "ref_doctype", "docname"),
+		("Notification Log", "document_type", "document_name"),
+	]
+	tables.extend(DATA_COLUMN_STRAGGLERS)
+
+	return tables
 
 
 def _link_columns(target_doctype: str) -> list[tuple[str, str]]:
@@ -203,12 +239,14 @@ def _remap_links(project_map, task_map):
 		_remap(doctype, column, project_map)
 	for doctype, column in _link_columns("Task"):
 		_remap(doctype, column, task_map)
-	for table_doctype, type_col, name_col in DYNAMIC_REF_TABLES:
+	for table_doctype, type_col, name_col in _get_dynamic_ref_tables():
 		_remap_dynamic(table_doctype, project_map, type_col, name_col, "Project")
 		_remap_dynamic(table_doctype, task_map, type_col, name_col, "Task")
 
 
 def _remap(doctype, column, mapping):
+	# ponytail: per-(table × column × project) UPDATEs across ~57 derived tables, unindexed on project;
+	# upgrade path = single CASE-expression UPDATE per column or temp mapping table join, if migration volume demands it.
 	if not frappe.db.table_exists(doctype):
 		return
 	table = frappe.qb.DocType(doctype)
