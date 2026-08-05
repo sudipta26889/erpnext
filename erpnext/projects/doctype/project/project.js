@@ -17,54 +17,6 @@ frappe.ui.form.on("Project", {
 			},
 		};
 	},
-	onload: function (frm) {
-		const so = frm.get_docfield("sales_order");
-		so.get_route_options_for_new_doc = () => {
-			if (frm.is_new()) return {};
-			return {
-				customer: frm.doc.customer,
-				project_name: frm.doc.name,
-			};
-		};
-
-		frm.set_query("user", "users", function () {
-			return {
-				query: "erpnext.projects.doctype.project.project.get_users_for_project",
-			};
-		});
-
-		frm.set_query("department", function (doc) {
-			return {
-				filters: {
-					company: doc.company,
-				},
-			};
-		});
-
-		// sales order
-		frm.set_query("sales_order", function () {
-			var filters = {
-				project: ["in", frm.doc.__islocal ? [""] : [frm.doc.name, ""]],
-				company: frm.doc.company,
-			};
-
-			if (frm.doc.customer) {
-				filters["customer"] = frm.doc.customer;
-			}
-
-			return {
-				filters: filters,
-			};
-		});
-
-		frm.set_query("cost_center", () => {
-			return {
-				filters: {
-					company: frm.doc.company,
-				},
-			};
-		});
-	},
 
 	refresh: function (frm) {
 		if (frm.doc.__islocal) {
@@ -80,22 +32,12 @@ frappe.ui.form.on("Project", {
 	set_custom_buttons: function (frm) {
 		if (!frm.is_new()) {
 			frm.add_custom_button(
-				__("Duplicate Project with Tasks"),
-				() => {
-					frm.events.create_duplicate(frm);
-				},
-				__("Actions")
-			);
-
-			frm.add_custom_button(
 				__("Update Costing and Billing"),
 				() => {
 					frm.events.update_costing_and_billing(frm);
 				},
 				__("Actions")
 			);
-
-			frm.trigger("set_project_status_button");
 
 			if (frappe.model.can_read("Task")) {
 				frm.add_custom_button(
@@ -112,16 +54,7 @@ frappe.ui.form.on("Project", {
 				frm.add_custom_button(
 					__("Kanban Board"),
 					() => {
-						frappe
-							.call(
-								"erpnext.projects.doctype.project.project.create_kanban_board_if_not_exists",
-								{
-									project: frm.doc.name,
-								}
-							)
-							.then(() => {
-								frappe.set_route("List", "Task", "Kanban", frm.doc.project_name);
-							});
+						frappe.set_route("List", "Task", "Kanban", frm.doc.project_name);
 					},
 					__("View")
 				);
@@ -142,71 +75,6 @@ frappe.ui.form.on("Project", {
 				}
 			},
 		});
-	},
-
-	set_project_status_button: function (frm) {
-		frm.add_custom_button(
-			__("Set Project Status"),
-			() => frm.events.get_project_status_dialog(frm).show(),
-			__("Actions")
-		);
-	},
-
-	get_project_status_dialog: function (frm) {
-		const dialog = new frappe.ui.Dialog({
-			title: __("Set Project Status"),
-			fields: [
-				{
-					fieldname: "status",
-					fieldtype: "Select",
-					label: "Status",
-					reqd: 1,
-					options: "Completed\nCancelled",
-				},
-			],
-			primary_action: function () {
-				frm.events.set_status(frm, dialog.get_values().status);
-				dialog.hide();
-			},
-			primary_action_label: __("Set Project Status"),
-		});
-		return dialog;
-	},
-
-	create_duplicate: function (frm) {
-		return new Promise((resolve) => {
-			frappe.prompt("Project Name", (data) => {
-				frappe
-					.xcall("erpnext.projects.doctype.project.project.create_duplicate_project", {
-						prev_doc: frm.doc,
-						project_name: data.value,
-					})
-					.then(() => {
-						frappe.set_route("Form", "Project", data.value);
-						frappe.show_alert(__("Duplicate project has been created"));
-					});
-				resolve();
-			});
-		});
-	},
-
-	set_status: function (frm, status) {
-		frappe.confirm(__("Set Project and all Tasks to status {0}?", [__(status).bold()]), () => {
-			frappe
-				.xcall("erpnext.projects.doctype.project.project.set_project_status", {
-					project: frm.doc.name,
-					status: status,
-				})
-				.then(() => {
-					frm.reload_doc();
-				});
-		});
-	},
-
-	collect_progress: function (frm) {
-		if (frm.doc.collect_progress && !frm.doc.subject) {
-			frm.set_value("subject", __("For project - {0}, update your status", [frm.doc.project_name]));
-		}
 	},
 });
 

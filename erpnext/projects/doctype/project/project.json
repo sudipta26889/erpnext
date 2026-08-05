@@ -2,21 +2,17 @@
  "actions": [],
  "allow_import": 1,
  "allow_rename": 1,
- "autoname": "naming_series:",
+ "autoname": "hash",
  "creation": "2013-03-07 11:55:07",
  "doctype": "DocType",
  "document_type": "Setup",
  "engine": "InnoDB",
+ "is_virtual": 1,
  "field_order": [
-  "naming_series",
   "project_name",
   "status",
-  "project_type",
-  "percent_complete_method",
   "column_break_5",
-  "project_template",
   "priority",
-  "department",
   "is_active",
   "percent_complete",
   "section_break_18",
@@ -37,33 +33,11 @@
   "total_billable_amount",
   "total_billed_amount",
   "total_consumed_material_cost",
-  "cost_center",
   "margin",
   "gross_margin",
   "column_break_37",
   "per_gross_margin",
-  "monitor_progress_tab",
-  "collect_progress",
-  "holiday_list",
-  "frequency",
-  "from_time",
-  "to_time",
-  "first_email",
-  "second_email",
-  "daily_time_to_send",
-  "day_to_send",
-  "weekly_time_to_send",
-  "column_break_45",
-  "subject",
-  "message",
   "more_info_tab",
-  "customer_details",
-  "customer",
-  "column_break_14",
-  "sales_order",
-  "users_section",
-  "users",
-  "copied_from",
   "section_break0",
   "notes",
   "connections_tab"
@@ -90,16 +64,6 @@
    "search_index": 1
   },
   {
-   "fieldname": "project_type",
-   "fieldtype": "Link",
-   "in_list_view": 1,
-   "in_standard_filter": 1,
-   "label": "Project Type",
-   "oldfieldname": "project_type",
-   "oldfieldtype": "Data",
-   "options": "Project Type"
-  },
-  {
    "fieldname": "is_active",
    "fieldtype": "Select",
    "label": "Is Active",
@@ -108,32 +72,17 @@
    "options": "Yes\nNo"
   },
   {
-   "default": "Task Completion",
-   "fieldname": "percent_complete_method",
-   "fieldtype": "Select",
-   "label": "% Complete Method",
-   "options": "Manual\nTask Completion\nTask Progress\nTask Weight"
-  },
-  {
    "bold": 1,
    "fieldname": "percent_complete",
    "fieldtype": "Percent",
    "in_list_view": 1,
    "label": "% Completed",
    "no_copy": 1,
-   "read_only_depends_on": "eval:doc.percent_complete_method != 'Manual'"
+   "read_only": 1
   },
   {
    "fieldname": "column_break_5",
    "fieldtype": "Column Break"
-  },
-  {
-   "allow_in_quick_entry": 1,
-   "fieldname": "project_template",
-   "fieldtype": "Link",
-   "label": "From Template",
-   "options": "Project Template",
-   "set_only_once": 1
   },
   {
    "bold": 1,
@@ -161,65 +110,6 @@
    "oldfieldname": "priority",
    "oldfieldtype": "Select",
    "options": "Medium\nLow\nHigh"
-  },
-  {
-   "fieldname": "department",
-   "fieldtype": "Link",
-   "label": "Department",
-   "options": "Department"
-  },
-  {
-   "collapsible": 1,
-   "fieldname": "customer_details",
-   "fieldtype": "Section Break",
-   "label": "Customer Details",
-   "oldfieldtype": "Section Break",
-   "options": "fa fa-user"
-  },
-  {
-   "fieldname": "customer",
-   "fieldtype": "Link",
-   "in_global_search": 1,
-   "label": "Customer",
-   "no_copy": 1,
-   "oldfieldname": "customer",
-   "oldfieldtype": "Link",
-   "options": "Customer",
-   "print_hide": 1,
-   "search_index": 1
-  },
-  {
-   "fieldname": "column_break_14",
-   "fieldtype": "Column Break"
-  },
-  {
-   "fieldname": "sales_order",
-   "fieldtype": "Link",
-   "label": "Sales Order",
-   "no_copy": 1,
-   "options": "Sales Order"
-  },
-  {
-   "collapsible": 1,
-   "fieldname": "users_section",
-   "fieldtype": "Section Break",
-   "label": "Users"
-  },
-  {
-   "description": "Project will be accessible on the website to these users",
-   "fieldname": "users",
-   "fieldtype": "Table",
-   "label": "Users",
-   "options": "Project User",
-   "permlevel": 1
-  },
-  {
-   "fieldname": "copied_from",
-   "fieldtype": "Data",
-   "hidden": 1,
-   "label": "Copied From",
-   "permlevel": 1,
-   "read_only": 1
   },
   {
    "collapsible": 1,
@@ -299,8 +189,7 @@
    "fieldtype": "Link",
    "label": "Company",
    "options": "Company",
-   "remember_last_selected_value": 1,
-   "reqd": 1
+   "remember_last_selected_value": 1
   },
   {
    "fieldname": "column_break_28",
@@ -331,12 +220,6 @@
    "read_only": 1
   },
   {
-   "fieldname": "cost_center",
-   "fieldtype": "Link",
-   "label": "Default Cost Center",
-   "options": "Cost Center"
-  },
-  {
    "fieldname": "margin",
    "fieldtype": "Section Break",
    "label": "Margin",
@@ -365,107 +248,9 @@
    "read_only": 1
   },
   {
-   "default": "0",
-   "fieldname": "collect_progress",
-   "fieldtype": "Check",
-   "label": "Collect Progress",
-   "search_index": 1
-  },
-  {
-   "depends_on": "collect_progress",
-   "fieldname": "holiday_list",
-   "fieldtype": "Link",
-   "label": "Holiday List",
-   "options": "Holiday List"
-  },
-  {
-   "depends_on": "eval:doc.collect_progress == true",
-   "fieldname": "frequency",
-   "fieldtype": "Select",
-   "label": "Frequency To Collect Progress",
-   "options": "Hourly\nTwice Daily\nDaily\nWeekly"
-  },
-  {
-   "depends_on": "eval:(doc.frequency == \"Hourly\" && doc.collect_progress)",
-   "fieldname": "from_time",
-   "fieldtype": "Time",
-   "label": "From Time"
-  },
-  {
-   "depends_on": "eval:(doc.frequency == \"Hourly\" && doc.collect_progress)",
-   "fieldname": "to_time",
-   "fieldtype": "Time",
-   "label": "To Time"
-  },
-  {
-   "depends_on": "eval:(doc.frequency == \"Twice Daily\" && doc.collect_progress == true)\n\n",
-   "fieldname": "first_email",
-   "fieldtype": "Time",
-   "label": "First Email"
-  },
-  {
-   "depends_on": "eval:(doc.frequency == \"Twice Daily\" && doc.collect_progress == true)",
-   "fieldname": "second_email",
-   "fieldtype": "Time",
-   "label": "Second Email"
-  },
-  {
-   "depends_on": "eval:(doc.frequency == \"Daily\" && doc.collect_progress == true)",
-   "fieldname": "daily_time_to_send",
-   "fieldtype": "Time",
-   "label": "Daily Time to send"
-  },
-  {
-   "depends_on": "eval:(doc.frequency == \"Weekly\" && doc.collect_progress == true)",
-   "fieldname": "day_to_send",
-   "fieldtype": "Select",
-   "label": "Day to Send",
-   "options": "Monday\nTuesday\nWednesday\nThursday\nFriday\nSaturday\nSunday"
-  },
-  {
-   "depends_on": "eval:(doc.frequency == \"Weekly\" && doc.collect_progress == true)",
-   "fieldname": "weekly_time_to_send",
-   "fieldtype": "Time",
-   "label": "Weekly Time to send"
-  },
-  {
-   "fieldname": "column_break_45",
-   "fieldtype": "Column Break"
-  },
-  {
-   "depends_on": "collect_progress",
-   "description": "Message will be sent to the users to get their status on the Project",
-   "fieldname": "message",
-   "fieldtype": "Text",
-   "label": "Message",
-   "mandatory_depends_on": "collect_progress"
-  },
-  {
-   "fieldname": "naming_series",
-   "fieldtype": "Select",
-   "label": "Series",
-   "no_copy": 1,
-   "options": "PROJ-.####",
-   "print_hide": 1,
-   "reqd": 1,
-   "set_only_once": 1
-  },
-  {
-   "depends_on": "collect_progress",
-   "fieldname": "subject",
-   "fieldtype": "Data",
-   "label": "Subject",
-   "mandatory_depends_on": "collect_progress"
-  },
-  {
    "fieldname": "costing_tab",
    "fieldtype": "Tab Break",
    "label": "Costing"
-  },
-  {
-   "fieldname": "monitor_progress_tab",
-   "fieldtype": "Tab Break",
-   "label": "Progress"
   },
   {
    "fieldname": "more_info_tab",
@@ -488,7 +273,7 @@
  "modified_by": "Administrator",
  "module": "Projects",
  "name": "Project",
- "naming_rule": "By \"Naming Series\" field",
+ "naming_rule": "Random",
  "owner": "Administrator",
  "permissions": [
   {
@@ -552,13 +337,12 @@
  ],
  "quick_entry": 1,
  "row_format": "Dynamic",
- "search_fields": "project_name,customer, status, priority, is_active",
+ "search_fields": "project_name, status, priority, is_active",
  "show_name_in_global_search": 1,
  "show_title_field_in_link": 1,
  "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
- "timeline_field": "customer",
  "title_field": "project_name",
  "track_seen": 1
 }
