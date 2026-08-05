@@ -110,10 +110,10 @@ class TestVirtualProject(IntegrationTestCase):
 
 		# COUNT aggregate with alias "count"
 		args = {"fields": [{"COUNT": "*", "as": "count"}], "filters": []}
-		result = Project.get_list(args)
-		self.assertEqual(result, [{"count": 2}])
+		rows = Project.get_list(args)
+		self.assertEqual(rows[0].count, 2)
 
 		# COUNT aggregate when disabled
 		with patch("erpnext.projects.doctype.project.project.is_enabled", return_value=False):
-			result = Project.get_list(args)
-			self.assertEqual(result, [{"count": 0}])
+			rows = Project.get_list(args)
+			self.assertEqual(rows[0].count, 0)

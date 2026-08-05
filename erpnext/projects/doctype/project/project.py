@@ -6,7 +6,7 @@ from frappe import _
 from frappe.model.document import Document
 
 from erpnext.projects.project_financials import compute_financials
-from erpnext.projects.taskpilot_client import TaskPilotError, TaskPilotNotFound, get_client, is_enabled
+from erpnext.projects.taskpilot_client import TaskPilotNotFound, get_client, is_enabled
 from erpnext.projects.taskpilot_mapping import make_identifier, project_to_payload, tp_to_project
 
 
@@ -16,12 +16,14 @@ class Project(Document):
 
 	def load_from_db(self):
 		if not is_enabled():
-			raise frappe.DoesNotExistError(f"Project {self.name} not found")
+			raise frappe.DoesNotExistError(
+				_("Project {0} is not available (TaskPilot integration disabled)").format(self.name)
+			)
 		client = get_client()
 		try:
 			tp_project = client.get_project(self.name)
 		except TaskPilotNotFound:
-			raise frappe.DoesNotExistError(f"Project {self.name} not found")
+			raise frappe.DoesNotExistError(_("Project {0} not found").format(self.name))
 		d = tp_to_project(tp_project)
 		d.update(compute_financials(self.name))
 		d["percent_complete"] = compute_percent_complete(self.name, client=client)
@@ -59,9 +61,9 @@ class Project(Document):
 		if aggregate_spec:
 			alias = aggregate_spec.get("as") or "result"
 			if not is_enabled():
-				return [{alias: 0}]
+				return [frappe._dict({alias: 0})]
 			count = len(_matching_rows(args))
-			return [{alias: count}]
+			return [frappe._dict({alias: count})]
 
 		if not is_enabled():
 			return []
