@@ -1,14 +1,5 @@
 frappe.listview_settings["Task"] = {
-	add_fields: [
-		"project",
-		"status",
-		"priority",
-		"exp_start_date",
-		"exp_end_date",
-		"subject",
-		"progress",
-		"depends_on_tasks",
-	],
+	add_fields: ["project", "status", "priority", "exp_start_date", "exp_end_date", "subject"],
 	filters: [["status", "=", "Open"]],
 	onload: function (listview) {
 		var method = "erpnext.projects.doctype.task.task.set_multiple_status";
@@ -29,7 +20,6 @@ frappe.listview_settings["Task"] = {
 			Working: "orange",
 			Completed: "green",
 			Cancelled: "dark grey",
-			Template: "blue",
 		};
 		return [__(doc.status), colors[doc.status], "status,=," + doc.status];
 	},
