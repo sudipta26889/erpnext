@@ -4,14 +4,24 @@
 import json
 import time
 
-import requests
-
 import frappe
+import requests
 from frappe import _
+from frappe.utils import cint
 
 
 class TaskPilotError(frappe.ValidationError):
 	pass
+
+
+def _parse_json(resp, url):
+	"""Parse JSON response, raising TaskPilotError on invalid JSON."""
+	try:
+		return resp.json()
+	except ValueError as e:
+		raise TaskPilotError(
+			_("TaskPilot returned a non-JSON response from {0}: {1}").format(url, resp.text[:500])
+		) from e
 
 
 def get_client() -> "TaskPilotClient":
@@ -47,17 +57,22 @@ class TaskPilotClient:
 				raise TaskPilotError(_("TaskPilot unreachable at {0}: {1}").format(self.base_url, e)) from e
 			if resp.status_code == 429 and attempt == 0:
 				# ponytail: one retry after the advertised reset window, capped at 30s
-				time.sleep(min(int(resp.headers.get("X-RateLimit-Reset") or 5), 30))
+				wait = min(cint(resp.headers.get("X-RateLimit-Reset")) or 5, 30)
+				time.sleep(wait)
 				continue
 			break
 		if resp.status_code >= 400:
-			detail = resp.json() if resp.content else {}
+			try:
+				detail = _parse_json(resp, url) if resp.content else {}
+			except TaskPilotError:
+				# If parsing failed, use raw text as detail
+				detail = resp.text[:500]
 			raise TaskPilotError(
 				_("TaskPilot API error {0} on {1} {2}: {3}").format(resp.status_code, method, url, detail)
 			)
 		if method != "GET":
 			self.invalidate_cache()
-		return resp.json() if resp.content else None
+		return _parse_json(resp, url) if resp.content else None
 
 	def _cache_key(self, path: str, params=None) -> str:
 		return f"taskpilot|{self.slug}|{path}|{json.dumps(params or {}, sort_keys=True)}"
@@ -83,4 +98,4 @@ class TaskPilotClient:
 			cursor = page.get("next_cursor")
 
 	def invalidate_cache(self):
-		frappe.cache.delete_keys(f"taskpilot|{self.slug}")
+		frappe.cache.delete_keys(f"taskpilot|{self.slug}|")
