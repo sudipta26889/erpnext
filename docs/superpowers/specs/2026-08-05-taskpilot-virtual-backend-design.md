@@ -18,9 +18,15 @@ Decisions made with the user:
 | Approach | In-place conversion of the existing `Project`/`Task` doctypes (fork), not parallel doctypes |
 | Deletes | Follow TaskPilot's no-hard-delete rule: task delete → Cancelled state; project delete → archive |
 
-## 2. Verified TaskPilot facts (from source, not docs)
+## 2. Verified TaskPilot facts (from source and live schema)
 
-Source: `/mnt/projects/TaskPilot/apps/api/taskpilot/`.
+Sources: `/mnt/projects/TaskPilot/apps/api/taskpilot/` and the live OpenAPI schema at `https://taskpilot-api.sudiptadhara.in/api/schema/` (66 paths; fetched 2026-08-05, copy in session scratchpad). The live schema confirms every field/endpoint claim below, plus:
+
+- **Read-by-identifier**: `GET /workspaces/{slug}/work-items/{project_identifier}-{issue_identifier}/` — the virtual Task `load_from_db` can fetch by docname in one call, no UUID resolution on reads. Projects have no by-identifier route (detail is by UUID), so the cached identifier→UUID map is needed for projects and for all writes.
+- **`external_source`/`external_id` exist on Project and State too** (not just work items) — migration idempotency and provisioned-state tagging work uniformly.
+- Project schema carries `default_state`, `default_assignee`, `project_lead`, `timezone`, and an `is_time_tracking_enabled` flag — the fork has a time-tracking feature behind that flag but exposes no public worklog endpoints; Timesheets stay in ERPNext regardless (billing).
+- Writable work-item fields confirmed in `IssueRequest`/`PatchedIssueRequest`: `name`, `description_html`, `priority`, `start_date`, `target_date`, `parent`, `state`, `assignees[]`, `labels[]`, `external_source`, `external_id`.
+- Confirmed absent from public v1: work-item **relations** endpoints and **webhook management** (both internal-API only today) — matching the phase-2 plan to extend the fork.
 
 - Public REST v1 (auth `X-Api-Key`, rate limit 60 req/min, 300 for service tokens):
   - Projects: `GET/POST /workspaces/<slug>/projects/`, `GET/PATCH/DELETE .../projects/<uuid>/`, archive/unarchive, summary (`api/urls/project.py`).
