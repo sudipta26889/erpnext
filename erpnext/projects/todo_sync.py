@@ -11,9 +11,13 @@ def push_assignees(doc, method=None):
 		return
 	try:
 		client = get_client()
+		filters = {"reference_type": "Task", "reference_name": doc.reference_name, "status": "Open"}
+		if method == "on_trash":
+			# on_trash fires before the row is deleted; exclude it from the aggregation
+			filters["name"] = ["!=", doc.name]
 		emails = frappe.get_all(
 			"ToDo",
-			filters={"reference_type": "Task", "reference_name": doc.reference_name, "status": "Open"},
+			filters=filters,
 			pluck="allocated_to",
 		)
 		by_email = {m.get("email"): m["id"] for m in client.members()}
