@@ -23,3 +23,4 @@ node_modules/
 # Banking SPA
 erpnext/public/banking
 erpnext/www/banking.html
+prod-docker/.env

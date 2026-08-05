@@ -1,0 +1,247 @@
+# TaskPilot ERPNext (fork) - production stack.
+#
+# Generated (not hand-written) from frappe/frappe_docker's own compose files, vendored unmodified
+# in ./frappe_docker, via the exact command frappe_docker's docs recommend for a custom build:
+#
+#   cd frappe_docker && docker compose --env-file ../.env \
+#     -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml \
+#     -f overrides/compose.noproxy.yaml config --no-interpolate > ../compose.yaml
+#
+# --no-interpolate keeps ${VAR} references literal (secrets stay in .env, not baked into this
+# file) while still resolving the override merges. NOTE: a top-level `include:` pointing at the
+# same 4 files was tried first and silently dropped the override files' values (e.g. configurator
+# kept DB_HOST empty instead of "db") - this compose version's `include:` merge order doesn't
+# match plain multi -f behavior for this case, so we generate a flat file instead. Re-run the
+# command above (after `git -C frappe_docker pull`) any time frappe_docker's upstream files change.
+#
+# Topology: configurator (one-shot) + backend (gunicorn) + frontend (nginx) + websocket (socketio)
+# + queue-short/queue-long (rq workers) + scheduler, backed by mariadb + redis-cache + redis-queue.
+# Only frontend is port-published (${HTTP_PUBLISH_PORT}, see .env). Everything else stays on the
+# compose-internal network.
+name: erpnext-prod
+networks:
+  default:
+    name: erpnext-prod_default
+services:
+  backend:
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
+        required: true
+    environment:
+      GUNICORN_THREADS: ${GUNICORN_THREADS:-4}
+      GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-120}
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
+    image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
+    networks:
+      default: null
+    platform: linux/amd64
+    pull_policy: ${PULL_POLICY:-always}
+    restart: ${RESTART_POLICY:-unless-stopped}
+    volumes:
+      - source: sites
+        target: /home/frappe/frappe-bench/sites
+        type: volume
+        volume: {}
+  configurator:
+    command:
+      - |
+        ls -1 apps > sites/apps.txt; bench set-config -g db_host $$DB_HOST; bench set-config -gp db_port $$DB_PORT; bench set-config -g redis_cache "redis://$$REDIS_CACHE"; bench set-config -g redis_queue "redis://$$REDIS_QUEUE"; bench set-config -g redis_socketio "redis://$$REDIS_QUEUE"; bench set-config -gp socketio_port $$SOCKETIO_PORT; bench set-config -g chromium_path /usr/bin/chromium-headless-shell;
+    depends_on:
+      db:
+        condition: service_healthy
+        required: true
+      redis-cache:
+        condition: service_started
+        required: true
+      redis-queue:
+        condition: service_started
+        required: true
+    entrypoint:
+      - bash
+      - -c
+    environment:
+      - DB_HOST=db
+      - DB_PORT=3306
+      - REDIS_CACHE=redis-cache:6379
+      - REDIS_QUEUE=redis-queue:6379
+      - SOCKETIO_PORT=9000
+    image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
+    networks:
+      default: null
+    platform: linux/amd64
+    pull_policy: ${PULL_POLICY:-always}
+    restart: on-failure
+    volumes:
+      - source: sites
+        target: /home/frappe/frappe-bench/sites
+        type: volume
+        volume: {}
+  db:
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+    environment:
+      MARIADB_AUTO_UPGRADE: 1
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-123}
+    healthcheck:
+      interval: 5s
+      retries: 5
+      start_period: 5s
+      test:
+        - CMD
+        - healthcheck.sh
+        - --connect
+        - --innodb_initialized
+      timeout: 5s
+    image: mariadb:11.8
+    networks:
+      default: null
+    restart: unless-stopped
+    volumes:
+      - source: db-data
+        target: /var/lib/mysql
+        type: volume
+        volume: {}
+  frontend:
+    command:
+      - nginx-entrypoint.sh
+    depends_on:
+      backend:
+        condition: service_started
+        required: true
+      websocket:
+        condition: service_started
+        required: true
+    environment:
+      BACKEND: backend:8000
+      CLIENT_MAX_BODY_SIZE: ${CLIENT_MAX_BODY_SIZE:-50m}
+      FRAPPE_SITE_NAME_HEADER: ${FRAPPE_SITE_NAME_HEADER:-$$host}
+      PROXY_READ_TIMEOUT: ${PROXY_READ_TIMEOUT:-120}
+      SOCKETIO: websocket:9000
+      UPSTREAM_REAL_IP_ADDRESS: ${UPSTREAM_REAL_IP_ADDRESS:-127.0.0.1}
+      UPSTREAM_REAL_IP_HEADER: ${UPSTREAM_REAL_IP_HEADER:-X-Forwarded-For}
+      UPSTREAM_REAL_IP_RECURSIVE: ${UPSTREAM_REAL_IP_RECURSIVE:-off}
+    image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
+    networks:
+      default: null
+    platform: linux/amd64
+    ports:
+      - ${HTTP_PUBLISH_PORT:-8080}:8080
+    pull_policy: ${PULL_POLICY:-always}
+    restart: ${RESTART_POLICY:-unless-stopped}
+    volumes:
+      - source: sites
+        target: /home/frappe/frappe-bench/sites
+        type: volume
+        volume: {}
+  queue-long:
+    command: bench worker --queue long,default,short
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
+        required: true
+    image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
+    networks:
+      default: null
+    platform: linux/amd64
+    pull_policy: ${PULL_POLICY:-always}
+    restart: ${RESTART_POLICY:-unless-stopped}
+    volumes:
+      - source: sites
+        target: /home/frappe/frappe-bench/sites
+        type: volume
+        volume: {}
+  queue-short:
+    command: bench worker --queue short,default
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
+        required: true
+    image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
+    networks:
+      default: null
+    platform: linux/amd64
+    pull_policy: ${PULL_POLICY:-always}
+    restart: ${RESTART_POLICY:-unless-stopped}
+    volumes:
+      - source: sites
+        target: /home/frappe/frappe-bench/sites
+        type: volume
+        volume: {}
+  redis-cache:
+    image: redis:8.6-alpine
+    networks:
+      default: null
+    restart: unless-stopped
+  redis-queue:
+    image: redis:8.6-alpine
+    networks:
+      default: null
+    restart: unless-stopped
+    volumes:
+      - source: redis-queue-data
+        target: /data
+        type: volume
+        volume: {}
+  scheduler:
+    command: bench schedule
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
+        required: true
+    image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
+    networks:
+      default: null
+    platform: linux/amd64
+    pull_policy: ${PULL_POLICY:-always}
+    restart: ${RESTART_POLICY:-unless-stopped}
+    volumes:
+      - source: sites
+        target: /home/frappe/frappe-bench/sites
+        type: volume
+        volume: {}
+  websocket:
+    command:
+      - node
+      - /home/frappe/frappe-bench/apps/frappe/socketio.js
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
+        required: true
+    image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
+    networks:
+      default: null
+    platform: linux/amd64
+    pull_policy: ${PULL_POLICY:-always}
+    restart: ${RESTART_POLICY:-unless-stopped}
+    volumes:
+      - source: sites
+        target: /home/frappe/frappe-bench/sites
+        type: volume
+        volume: {}
+volumes:
+  db-data:
+    name: erpnext-prod_db-data
+  redis-queue-data:
+    name: erpnext-prod_redis-queue-data
+  sites:
+    name: erpnext-prod_sites
+x-backend-defaults:
+  depends_on:
+    configurator:
+      condition: service_completed_successfully
+  image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
+  pull_policy: ${PULL_POLICY:-always}
+  restart: ${RESTART_POLICY:-unless-stopped}
+  volumes:
+    - sites:/home/frappe/frappe-bench/sites
+x-customizable-image:
+  image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
+  pull_policy: ${PULL_POLICY:-always}
+  restart: ${RESTART_POLICY:-unless-stopped}
+x-depends-on-configurator:
+  depends_on:
+    configurator:
+      condition: service_completed_successfully
