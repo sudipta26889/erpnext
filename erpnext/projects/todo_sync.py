@@ -1,6 +1,20 @@
 import frappe
+from frappe.desk.doctype.todo.todo import ToDo
 
 from erpnext.projects.taskpilot_client import TaskPilotError, get_client
+
+
+class CustomToDo(ToDo):
+	"""frappe core's update_in_reference() raw-writes `_assign` to `tab{reference_type}` and only
+	tolerates a missing table during `frappe.flags.in_install`. Virtual doctypes (Project/Task)
+	have no such table once the migration patch drops tabProject/tabTask - skip the raw write for
+	those; push_assignees (registered as this doctype's on_update/on_trash hook) is the real
+	assignee mirror for TaskPilot-backed doctypes."""
+
+	def update_in_reference(self):
+		if self.reference_type and frappe.get_meta(self.reference_type).is_virtual:
+			return
+		super().update_in_reference()
 
 
 def push_assignees(doc, method=None):

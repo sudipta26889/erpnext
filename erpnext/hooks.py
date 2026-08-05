@@ -361,6 +361,13 @@ pre_submit_validation_doctypes = [
 	"Sales Order",
 ]
 
+# frappe core's ToDo.update_in_reference() raw-writes an `_assign` column on the referenced
+# doctype's own table; virtual doctypes (Project/Task, TaskPilot-backed) have no such table once
+# the Task 12 migration patch drops tabProject/tabTask. See erpnext.projects.todo_sync.CustomToDo.
+override_doctype_class = {
+	"ToDo": "erpnext.projects.todo_sync.CustomToDo",
+}
+
 doc_events = {
 	"*": {
 		"validate": [
