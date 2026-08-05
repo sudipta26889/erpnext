@@ -9,6 +9,20 @@ from frappe.core.doctype.installed_applications.installed_applications import ge
 import erpnext
 
 
+def _count(doctype: str) -> int:
+	"""frappe.db.count queries the doctype's SQL table directly, which Project/Task
+	(virtual, TaskPilot-backed) no longer have; route those through their controller."""
+	if doctype == "Project":
+		from erpnext.projects.doctype.project.project import Project
+
+		return Project.get_count({})
+	if doctype == "Task":
+		from erpnext.projects.doctype.task.task import Task
+
+		return Task.get_count({})
+	return frappe.db.count(doctype)
+
+
 def get_level(site_info):
 	activation_level = site_info.get("activation", {}).get("activation_level", 0)
 	sales_data = site_info.get("activation", {}).get("sales_data", [])
@@ -41,7 +55,7 @@ def get_level(site_info):
 	}
 
 	for doctype, min_count in doctypes.items():
-		count = frappe.db.count(doctype)
+		count = _count(doctype)
 		if count > min_count:
 			activation_level += 1
 		sales_data.append({doctype: count})

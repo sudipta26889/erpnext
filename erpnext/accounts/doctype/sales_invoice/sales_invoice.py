@@ -297,7 +297,6 @@ class SalesInvoice(SellingController):
 
 		SalesTaxWithholding(self).on_validate()
 
-		self.validate_proj_cust()
 		POSService(self).validate_pos_return()
 		self.validate_with_previous_doc()
 		self.validate_uom_is_integer("stock_uom", "stock_qty")
@@ -476,7 +475,6 @@ class SalesInvoice(SellingController):
 
 		if frappe.get_single_value("Selling Settings", "sales_update_frequency") == "Each Transaction":
 			update_company_current_month_sales(self.company)
-			self.update_project()
 		update_linked_doc(self.doctype, self.name, self.inter_company_invoice_reference)
 
 		if self.coupon_code:
@@ -550,7 +548,6 @@ class SalesInvoice(SellingController):
 
 		if frappe.get_single_value("Selling Settings", "sales_update_frequency") == "Each Transaction":
 			update_company_current_month_sales(self.company)
-			self.update_project()
 
 		if not self.is_return and not self.is_consolidated and self.loyalty_program:
 			LoyaltyService(self).delete_loyalty_point_entry()
@@ -871,25 +868,6 @@ class SalesInvoice(SellingController):
 							_("{0} is mandatory for Item {1}").format(key, d.item_code), raise_exception=1
 						)
 
-	def validate_proj_cust(self):
-		"""check for does customer belong to same project as entered.."""
-		if self.project and self.customer:
-			Project = frappe.qb.DocType("Project")
-
-			query = (
-				frappe.qb.from_(Project)
-				.select(Project.name)
-				.where(Project.name == self.project)
-				.where(
-					(Project.customer == self.customer)
-					| (Project.customer.isnull())
-					| (Project.customer == "")
-				)
-			)
-
-			if not query.run():
-				throw(_("Customer {0} does not belong to project {1}").format(self.customer, self.project))
-
 	def validate_warehouse(self):
 		super().validate_warehouse()
 
@@ -1119,17 +1097,6 @@ class SalesInvoice(SellingController):
 	def on_recurring(self, reference_doc, auto_repeat_doc):
 		self.set("write_off_amount", reference_doc.get("write_off_amount"))
 		self.due_date = None
-
-	def update_project(self):
-		unique_projects = list(set([d.project for d in self.get("items") if d.project]))
-		if self.project and self.project not in unique_projects:
-			unique_projects.append(self.project)
-
-		for p in unique_projects:
-			project = frappe.get_doc("Project", p)
-			project.update_billed_amount()
-			project.calculate_gross_margin()
-			project.db_update()
 
 	def update_billed_qty_in_scio(self):
 		if self.is_return:

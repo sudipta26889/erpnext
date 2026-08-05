@@ -145,3 +145,20 @@ class TestVirtualProject(IntegrationTestCase):
 		with patch("erpnext.projects.doctype.project.project.is_enabled", return_value=False):
 			rows = Project.get_list(args)
 			self.assertEqual(rows[0].count, 0)
+
+
+@patch("erpnext.controllers.queries.get_client")
+class TestGetProjectNameQuery(IntegrationTestCase):
+	def test_get_project_name_api_backed(self, mock_get_client):
+		from erpnext.controllers.queries import get_project_name
+
+		mock_get_client.return_value.list_projects.return_value = [fixtures.PROJECT]
+		rows = get_project_name("Project", "", "name", 0, 20, {})
+		self.assertEqual(rows, [["WEBSITE", "Website Revamp"]])
+
+	def test_get_project_name_returns_empty_on_client_error(self, mock_get_client):
+		from erpnext.controllers.queries import get_project_name
+		from erpnext.projects.taskpilot_client import TaskPilotError
+
+		mock_get_client.side_effect = TaskPilotError("disabled")
+		self.assertEqual(get_project_name("Project", "", "name", 0, 20, {}), [])

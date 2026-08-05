@@ -3535,38 +3535,6 @@ class TestDeliveryNote(ERPNextTestSuite):
 		dn.items[0].stock_qty = 2
 		dn.save()
 
-	def test_validate_proj_cust_matches_project_customer(self):
-		"""validate_proj_cust must reject a DN whose customer differs from the project's customer,
-		and accept one when the project has no customer (the ifnull(customer,'')='' / `is not set`
-		branch of the converted or_filters)."""
-		mismatch_project = frappe.get_doc(
-			{
-				"doctype": "Project",
-				"project_name": "_Test DN Project Mismatch",
-				"company": "_Test Company",
-				"customer": "_Test Customer 1",
-			}
-		).insert()
-		dn = create_delivery_note(customer="_Test Customer", do_not_save=True)
-		dn.project = mismatch_project.name
-		with self.assertRaises(frappe.ValidationError) as cm:
-			dn.insert()
-		self.assertIn("does not belong to project", str(cm.exception))
-
-		# A project with no customer must pass via the empty-string/NULL or_filters branch.
-		open_project = frappe.get_doc(
-			{
-				"doctype": "Project",
-				"project_name": "_Test DN Project No Customer",
-				"company": "_Test Company",
-			}
-		).insert()
-		self.assertFalse(open_project.customer)
-		dn2 = create_delivery_note(customer="_Test Customer", do_not_save=True)
-		dn2.project = open_project.name
-		dn2.insert()  # must not raise
-		self.assertTrue(dn2.name)
-
 	def test_check_next_docstatus_blocks_cancel_with_submitted_invoice(self):
 		"""check_next_docstatus must block cancelling a DN once a submitted Sales Invoice draws from
 		it — covers the converted child-table get_all (Sales Invoice Item, docstatus=1)."""

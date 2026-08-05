@@ -198,9 +198,9 @@ def create_delivery_from_so(pick_list, sales_order_list, target, target_doc=None
 			"name": "so_detail",
 			"parent": "against_sales_order" if target == "Delivery Note" else "sales_order",
 		},
-		"condition": lambda doc: abs(doc.delivered_qty) < abs(doc.qty)
-		and doc.delivered_by_supplier != 1
-		and select_item(doc),
+		"condition": lambda doc: (
+			abs(doc.delivered_qty) < abs(doc.qty) and doc.delivered_by_supplier != 1 and select_item(doc)
+		),
 	}
 
 	kwargs = {"skip_item_mapping": True, "ignore_pricing_rule": pick_list.ignore_pricing_rule}
@@ -323,7 +323,11 @@ def update_delivery_note_item(source, target, delivery_note):
 
 
 def update_child_item(source, target, target_doc):
-	cost_center = frappe.db.get_value("Project", target_doc.project, "cost_center")
+	cost_center = None
+	if target_doc.project:
+		from erpnext.projects.taskpilot_client import get_fallback_cost_center
+
+		cost_center = get_fallback_cost_center()
 	if not cost_center:
 		cost_center = get_cost_center(source.item_code, "Item", target_doc.company)
 

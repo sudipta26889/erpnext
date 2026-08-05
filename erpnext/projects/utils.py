@@ -5,25 +5,21 @@
 
 
 import frappe
-from frappe.query_builder import Case
 
 
 @frappe.whitelist()
 @frappe.validate_and_sanitize_search_inputs
 def query_task(doctype: str, txt: str, searchfield: str, start: int, page_len: int, filters: dict):
-	search_str = f"%{txt}%"
-	prefix_str = f"{txt}%"
+	from erpnext.projects.doctype.task.task import Task
+	from erpnext.projects.taskpilot_client import TaskPilotError
 
-	Task = frappe.qb.DocType("Task")
-	query = frappe.qb.get_query("Task", fields=["name", "subject"], ignore_permissions=False)
-
-	return (
-		query.where(Task[searchfield].like(search_str) | Task.subject.like(search_str))
-		.orderby(Case().when(Task.subject.like(prefix_str), 0).else_(1))
-		.orderby(Case().when(Task[searchfield].like(prefix_str), 0).else_(1))
-		.orderby(Task[searchfield])
-		.orderby(Task.subject)
-		.limit(page_len)
-		.offset(start)
-		.run()
+	task_filters = (
+		[["Task", "project", "=", filters["project"]]] if filters and filters.get("project") else []
 	)
+	try:
+		rows = Task.get_list({"filters": task_filters, "page_length": 10**6})
+	except TaskPilotError:
+		return []
+	needle = (txt or "").lower()
+	rows = [r for r in rows if needle in r.name.lower() or needle in (r.subject or "").lower()]
+	return [[r.name, r.subject] for r in rows[int(start) : int(start) + int(page_len)]]

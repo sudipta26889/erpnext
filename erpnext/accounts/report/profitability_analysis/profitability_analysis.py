@@ -49,7 +49,10 @@ def get_accounts_data(based_on, company):
 			.run(as_dict=True)
 		)
 	elif based_on == "Project":
-		return frappe.get_all("Project", fields=["name"], filters={"company": company}, order_by="name")
+		from erpnext.projects.doctype.project.project import Project
+
+		# company filter dropped — TaskPilot projects aren't scoped by company (cf. get_project_name).
+		return Project.get_list({"filters": [], "page_length": 10**6})
 	else:
 		filters = {}
 		doctype = frappe.unscrub(based_on)

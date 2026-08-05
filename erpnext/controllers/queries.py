@@ -25,6 +25,8 @@ from pypika import Order
 
 import erpnext
 from erpnext.accounts.utils import build_qb_match_conditions
+from erpnext.projects.taskpilot_client import TaskPilotError, get_client
+from erpnext.projects.taskpilot_mapping import tp_to_project
 from erpnext.stock.doctype.company_restriction.company_restriction import get_restriction_criterion
 from erpnext.stock.get_item_details import _get_item_tax_template
 from erpnext.stock.utils import get_combine_datetime
@@ -422,58 +424,14 @@ def bom(
 def get_project_name(
 	doctype: str, txt: str, searchfield: str, start: int, page_len: int, filters: dict | None = None
 ):
-	proj = qb.DocType("Project")
-	qb_filter_and_conditions = []
-	qb_filter_or_conditions = []
-
-	if filters:
-		if filters.get("customer"):
-			qb_filter_and_conditions.append(
-				(proj.customer == filters.get("customer")) | (proj.customer.isnull()) | (proj.customer == "")
-			)
-
-		if filters.get("company"):
-			qb_filter_and_conditions.append(proj.company == filters.get("company"))
-
-	qb_filter_and_conditions.append(proj.status.notin(["Completed", "Cancelled", "On hold"]))
-
-	q = qb.from_(proj)
-
-	fields = get_fields(doctype, ["name", "project_name"])
-	for x in fields:
-		q = q.select(proj[x])
-
-	# don't consider 'customer' and 'status' fields for pattern search, as they must be exactly matched
-	searchfields = [
-		x for x in frappe.get_meta(doctype).get_search_fields() if x not in ["customer", "status"]
-	]
-
-	# pattern search
-	if txt:
-		for x in searchfields:
-			qb_filter_or_conditions.append(proj[x].like(f"%{txt}%"))
-
-	q = q.where(Criterion.all(qb_filter_and_conditions)).where(Criterion.any(qb_filter_or_conditions))
-
-	# ordering
-	if txt:
-		# project_name containing search string 'txt' will be given higher precedence
-		q = q.orderby(
-			Case()
-			.when(
-				Locate(Lower(txt), Lower(proj.project_name)) > 0,
-				Locate(Lower(txt), Lower(proj.project_name)),
-			)
-			.else_(99999)
-		)
-	q = q.orderby(proj.idx, order=Order.desc).orderby(proj.name)
-
-	if page_len:
-		q = q.limit(page_len)
-
-	if start:
-		q = q.offset(start)
-	return q.run()
+	# filters like customer/company are ignored now — TaskPilot projects don't carry them.
+	try:
+		rows = [tp_to_project(p) for p in get_client().list_projects()]
+	except TaskPilotError:
+		return []
+	needle = (txt or "").lower()
+	rows = [r for r in rows if needle in r.name.lower() or needle in (r.project_name or "").lower()]
+	return [[r.name, r.project_name] for r in rows[int(start) : int(start) + int(page_len)]]
 
 
 @frappe.whitelist()

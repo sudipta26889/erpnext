@@ -39,6 +39,11 @@ def get_client() -> "TaskPilotClient":
 	return TaskPilotClient(settings)
 
 
+def get_fallback_cost_center() -> str | None:
+	"""Per-project cost centers are retired; every project now shares this fallback."""
+	return frappe.get_cached_doc("TaskPilot Settings").default_cost_center
+
+
 class TaskPilotClient:
 	def __init__(self, settings):
 		self.base_url = (settings.api_url or "").rstrip("/")

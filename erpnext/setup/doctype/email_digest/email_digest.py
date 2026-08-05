@@ -292,13 +292,12 @@ class EmailDigest(Document):
 		if not user_id:
 			user_id = frappe.session.user
 
-		project_list = frappe.get_all(
-			"Project",
-			filters={"status": "Open", "project_type": "External"},
-			fields=["*"],
-			order_by="creation asc",
-			limit=10,
-		)
+		# project_type no longer exists on the TaskPilot-backed Project; the "External" filter
+		# is dropped along with it (matches get_project_name silently dropping customer/company).
+		from erpnext.projects.doctype.project.project import Project
+
+		args = {"filters": [["Project", "status", "=", "Open"]], "page_length": 10}
+		project_list = Project.get_list(args)
 
 		for t in project_list:
 			t.link = get_url_to_form("Issue", t.name)
@@ -307,7 +306,9 @@ class EmailDigest(Document):
 
 	def get_project_count(self):
 		"""Get count of Project"""
-		return frappe.db.count("Project", {"status": "Open", "project_type": "External"})
+		from erpnext.projects.doctype.project.project import Project
+
+		return Project.get_count({"filters": [["Project", "status", "=", "Open"]]})
 
 	def set_accounting_cards(self, context):
 		"""Create accounting cards if checked"""

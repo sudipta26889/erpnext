@@ -1086,7 +1086,9 @@ def get_default_cost_center(ctx: ItemDetailsCtx, item=None, item_group=None, bra
 		company = ctx.get("company")
 
 	if ctx.get("project"):
-		cost_center = frappe.db.get_value("Project", ctx.get("project"), "cost_center", cache=True)
+		from erpnext.projects.taskpilot_client import get_fallback_cost_center
+
+		cost_center = get_fallback_cost_center()
 
 	if not cost_center and (item and item_group and brand):
 		if ctx.get("customer"):

@@ -84,12 +84,14 @@ def make_purchase_receipt(
 				},
 				"postprocess": update_item,
 				"condition": lambda doc: (
-					True
-					if is_unit_price_row(doc)
-					else abs(doc.received_qty) < abs(get_max_receivable_qty(doc))
-				)
-				and doc.delivered_by_supplier != 1
-				and select_item(doc),
+					(
+						True
+						if is_unit_price_row(doc)
+						else abs(doc.received_qty) < abs(get_max_receivable_qty(doc))
+					)
+					and doc.delivered_by_supplier != 1
+					and select_item(doc)
+				),
 			},
 			"Purchase Taxes and Charges": {"doctype": "Purchase Taxes and Charges", "reset_value": True},
 		},
@@ -149,6 +151,8 @@ def get_mapped_purchase_invoice(source_name, target_doc=None, ignore_permissions
 		return query.run(pluck="qty")[0] or 0
 
 	def update_item(obj, target, source_parent):
+		from erpnext.projects.taskpilot_client import get_fallback_cost_center
+
 		billed_qty = flt(get_billed_qty(obj.name))
 		target.qty = flt(obj.qty) - billed_qty
 
@@ -156,7 +160,7 @@ def get_mapped_purchase_invoice(source_name, target_doc=None, ignore_permissions
 		item_group = get_item_group_defaults(target.item_code, source_parent.company)
 		target.cost_center = (
 			obj.cost_center
-			or frappe.db.get_value("Project", obj.project, "cost_center")
+			or (get_fallback_cost_center() if obj.project else None)
 			or item.get("buying_cost_center")
 			or item_group.get("buying_cost_center")
 		)
@@ -189,11 +193,13 @@ def get_mapped_purchase_invoice(source_name, target_doc=None, ignore_permissions
 			},
 			"postprocess": update_item,
 			"condition": lambda doc: (
-				doc.base_amount == 0
-				or abs(doc.billed_amt) < abs(doc.amount)
-				or doc.qty > flt(get_billed_qty(doc.name))
-			)
-			and select_item(doc),
+				(
+					doc.base_amount == 0
+					or abs(doc.billed_amt) < abs(doc.amount)
+					or doc.qty > flt(get_billed_qty(doc.name))
+				)
+				and select_item(doc)
+			),
 		},
 		"Purchase Taxes and Charges": {"doctype": "Purchase Taxes and Charges", "reset_value": True},
 	}
