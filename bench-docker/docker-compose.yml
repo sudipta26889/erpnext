@@ -1,0 +1,61 @@
+name: tp-bench
+
+# Dockerized bench for ERPNext (feature/taskpilot-virtual-backend), used to build/test the
+# TaskPilot virtual backend. Single container mirrors ERPNext's own CI recipe (see
+# /mnt/projects/erpnext/.github/workflows/server-tests-mariadb.yml + .github/helper/install.sh
+# + .github/helper/start-db.sh): MariaDB and Redis run INSIDE this same container, not as
+# sidecars - that's what the ghcr.io/frappe/erpnext-ci-mariadb image is built for (it already
+# bundles mariadb-server, redis-server, wkhtmltopdf, node 24, python 3.14, and the `bench` CLI).
+#
+# apps/erpnext in the bench is a SYMLINK to this bind-mounted host working tree (set up by
+# scripts/bootstrap.sh), not a copy - so edits made on the host under /mnt/projects/erpnext are
+# immediately live in the bench, with no rebuild/copy step.
+#
+# User: the image ships a preinstalled "ubuntu" user at uid:gid 1000:1000, which happens to
+# match the host user (sudipta, 1000:1000) that owns /mnt/projects/erpnext. Running the
+# container as 1000:1000 means the bind mount "just works" with full read/write, no chown
+# needed, and mariadbd/redis (which both refuse to run as literal root) run happily as this uid.
+services:
+  bench:
+    image: ghcr.io/frappe/erpnext-ci-mariadb:py3.14-node24
+    container_name: tp-bench
+    hostname: tp-bench
+    user: "1000:1000"
+    working_dir: /home/ubuntu
+    environment:
+      HOME: /home/ubuntu
+      TZ: Asia/Kolkata
+      PIP_CACHE_DIR: /home/ubuntu/.cache/pip
+      UV_CACHE_DIR: /home/ubuntu/.cache/uv
+      YARN_CACHE_FOLDER: /home/ubuntu/.cache/yarn
+      npm_config_cache: /home/ubuntu/.cache/npm
+    command: ["sleep", "infinity"]
+    tty: true
+    stdin_open: true
+    restart: unless-stopped
+    # Port policy: every port this stack binds - published or container-internal - lives in
+    # 4400-4499 (host range was fully free at setup time; default 8000 collided with other
+    # containers on this host). Only the bench webserver is published; MariaDB/Redis stay
+    # container-internal (127.0.0.1 inside the container) since nothing outside the container
+    # needs to reach them. Full map, also recorded in the report:
+    #   webserver_port   4400  (published below)
+    #   mariadb           4406  (container-internal only)
+    #   redis_cache       4479  (container-internal only)
+    #   redis_queue       4480  (container-internal only)
+    #   socketio_port     4481  (config only - socketio server is not started by this task)
+    #   file_watcher_port 4482  (config only - not started by this task)
+    ports:
+      - "127.0.0.1:4400:4400"
+    volumes:
+      # Host working tree - hard requirement: bind-mounted at the SAME absolute path so the
+      # bench-side symlink (apps/erpnext -> /mnt/projects/erpnext) resolves identically inside
+      # and outside the container.
+      - /mnt/projects/erpnext:/mnt/projects/erpnext
+      # Persistent bench state (sites, DB datadir, venv, node_modules, redis configs) - survives
+      # container recreation. Owned by uid 1000 automatically since the host user creating it
+      # (sudipta) IS uid 1000.
+      - ./volumes/home:/home/ubuntu
+      # This directory itself, at the same path, so run-in-bench.sh can hand off to the
+      # in-container helper scripts (scripts/ensure-services.sh, scripts/run-bench-cmd.sh)
+      # without piping script text through `docker compose exec`.
+      - /mnt/projects/erpnext-bench:/mnt/projects/erpnext-bench
