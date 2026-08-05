@@ -1,0 +1,35 @@
+{
+ "actions": [],
+ "creation": "2026-08-05 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled", "api_url", "workspace_slug", "api_key", "column_break_1",
+  "cache_ttl", "lenient_link_validation", "default_cost_center"
+ ],
+ "fields": [
+  {"fieldname": "enabled", "fieldtype": "Check", "label": "Enabled", "default": "0"},
+  {"fieldname": "api_url", "fieldtype": "Data", "label": "API URL",
+   "description": "Base URL, e.g. https://taskpilot-api.sudiptadhara.in", "mandatory_depends_on": "enabled"},
+  {"fieldname": "workspace_slug", "fieldtype": "Data", "label": "Workspace Slug", "mandatory_depends_on": "enabled"},
+  {"fieldname": "api_key", "fieldtype": "Password", "label": "API Key", "mandatory_depends_on": "enabled"},
+  {"fieldname": "column_break_1", "fieldtype": "Column Break"},
+  {"fieldname": "cache_ttl", "fieldtype": "Int", "label": "Cache TTL (seconds)", "default": "60"},
+  {"fieldname": "lenient_link_validation", "fieldtype": "Check", "label": "Lenient Link Validation",
+   "default": "1", "description": "Warn instead of failing transaction saves when TaskPilot is unreachable"},
+  {"fieldname": "default_cost_center", "fieldtype": "Link", "label": "Default Cost Center", "options": "Cost Center",
+   "description": "Fallback cost center for project-linked transactions (replaces per-project cost center)"}
+ ],
+ "issingle": 1,
+ "modified": "2026-08-05 12:00:00.000000",
+ "module": "Projects",
+ "name": "TaskPilot Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {"role": "Projects Manager", "read": 1, "write": 1},
+  {"role": "System Manager", "read": 1, "write": 1}
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}
