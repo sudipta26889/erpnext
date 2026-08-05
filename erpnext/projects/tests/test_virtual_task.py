@@ -56,6 +56,38 @@ class TestVirtualTask(IntegrationTestCase):
 		frappe.get_doc("Task", "WEBSITE-12").delete()
 		c.update_work_item.assert_called_with("WEBSITE-12", {"state": "s-cancel"})
 
+	@patch("erpnext.projects.doctype.task.task.is_enabled", return_value=False)
+	def test_disabled_strict_raises_does_not_exist(self, mock_is_enabled, mock_get_client):
+		with patch("erpnext.projects.doctype.task.task.is_lenient", return_value=False):
+			self.assertRaises(frappe.DoesNotExistError, frappe.get_doc, "Task", "WEBSITE-12")
+
+	@patch("erpnext.projects.doctype.task.task.is_enabled", return_value=False)
+	def test_disabled_lenient_returns_stub(self, mock_is_enabled, mock_get_client):
+		with patch("erpnext.projects.doctype.task.task.is_lenient", return_value=True):
+			doc = frappe.get_doc("Task", "WEBSITE-12")
+			self.assertEqual(doc.name, "WEBSITE-12")
+			self.assertEqual(doc.project, "WEBSITE")
+			self.assertEqual(doc.status, "Open")
+			self.assertEqual(doc.docstatus, 0)
+
+	def test_unreachable_lenient_returns_stub(self, mock_get_client):
+		from erpnext.projects.taskpilot_client import TaskPilotError
+
+		c = _mock(mock_get_client)
+		c.get_work_item.side_effect = TaskPilotError("unreachable")
+		with patch("erpnext.projects.doctype.task.task.is_lenient", return_value=True):
+			doc = frappe.get_doc("Task", "WEBSITE-12")
+			self.assertEqual(doc.name, "WEBSITE-12")
+			self.assertEqual(doc.project, "WEBSITE")
+
+	def test_unreachable_strict_propagates_error(self, mock_get_client):
+		from erpnext.projects.taskpilot_client import TaskPilotError
+
+		c = _mock(mock_get_client)
+		c.get_work_item.side_effect = TaskPilotError("unreachable")
+		with patch("erpnext.projects.doctype.task.task.is_lenient", return_value=False):
+			self.assertRaises(TaskPilotError, frappe.get_doc, "Task", "WEBSITE-12")
+
 	def test_get_list_filters_status(self, mock_get_client):
 		_mock(mock_get_client)
 		from erpnext.projects.doctype.task.task import Task
@@ -75,6 +107,45 @@ class TestVirtualTask(IntegrationTestCase):
 				"page_length": 20,
 			}
 		)
+		self.assertEqual(rows, [])
+
+	def test_get_list_date_range_filter_for_calendar(self, mock_get_client):
+		# Shape frappe.desk.calendar.get_events / the Gantt view send: >=/<= on
+		# exp_start_date/exp_end_date, no explicit page_length (I5).
+		c = _mock(mock_get_client)
+		other = dict(
+			fixtures.WORK_ITEM,
+			id="33333333-3333-3333-3333-333333333333",
+			sequence_id=13,
+			start_date="2026-09-01",
+			target_date="2026-09-10",
+		)
+		c.list_work_items.return_value = [fixtures.WORK_ITEM, other]
+		from erpnext.projects.doctype.task.task import Task
+
+		rows = Task.get_list(
+			{
+				"filters": [
+					["Task", "exp_start_date", "<=", "2026-08-25"],
+					["Task", "exp_end_date", ">=", "2026-08-15"],
+				]
+			}
+		)
+		self.assertEqual([r.name for r in rows], ["WEBSITE-12"])
+
+	def test_get_list_date_range_filter_excludes_none_dates(self, mock_get_client):
+		c = _mock(mock_get_client)
+		no_dates = dict(
+			fixtures.WORK_ITEM,
+			id="44444444-4444-4444-4444-444444444444",
+			sequence_id=14,
+			start_date=None,
+			target_date=None,
+		)
+		c.list_work_items.return_value = [no_dates]
+		from erpnext.projects.doctype.task.task import Task
+
+		rows = Task.get_list({"filters": [["Task", "exp_start_date", "<=", "2026-08-25"]]})
 		self.assertEqual(rows, [])
 
 	@patch("erpnext.projects.doctype.task.task.is_enabled", return_value=False)

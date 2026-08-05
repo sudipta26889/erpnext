@@ -193,7 +193,6 @@ class BootStrapTestData:
 		self.make_employees()
 		self.make_brand()
 		self.make_monthly_distribution()
-		self.make_projects()
 		self.make_dunning_type()
 		self.make_finance_book()
 		self.make_leads()
@@ -361,17 +360,6 @@ class BootStrapTestData:
 			}
 		]
 		self.make_records(["distribution_id"], records)
-
-	def make_projects(self):
-		records = [
-			{
-				"doctype": "Project",
-				"company": "_Test Company",
-				"project_name": "_Test Project",
-				"status": "Open",
-			}
-		]
-		self.make_records(["project_name"], records)
 
 	def make_customer_group(self):
 		records = [

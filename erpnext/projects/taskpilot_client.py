@@ -2,12 +2,16 @@
 # For license information, please see license.txt
 
 import json
+import re
 import time
 
 import frappe
 import requests
 from frappe import _
 from frappe.utils import cint
+
+DOCNAME_RE = re.compile(r"^[A-Za-z0-9]+-[0-9]+$")
+IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9]+$")
 
 
 class TaskPilotError(frappe.ValidationError):
@@ -16,6 +20,18 @@ class TaskPilotError(frappe.ValidationError):
 
 class TaskPilotNotFound(TaskPilotError):
 	pass
+
+
+def _validate_docname(docname: str) -> None:
+	"""Work item docnames are interpolated straight into request URLs; reject anything that
+	isn't the PROJECT-123 shape before it gets near `requests` (path-injection surface)."""
+	if not docname or not DOCNAME_RE.match(docname):
+		raise TaskPilotNotFound(_("Not a valid TaskPilot work item name: {0}").format(docname))
+
+
+def _validate_identifier(identifier: str) -> None:
+	if not identifier or not IDENTIFIER_RE.match(identifier):
+		raise TaskPilotNotFound(_("Not a valid TaskPilot project identifier: {0}").format(identifier))
 
 
 def _parse_json(resp, url):
@@ -30,6 +46,10 @@ def _parse_json(resp, url):
 
 def is_enabled() -> bool:
 	return bool(frappe.get_cached_doc("TaskPilot Settings").enabled)
+
+
+def is_lenient() -> bool:
+	return bool(frappe.get_cached_doc("TaskPilot Settings").lenient_link_validation)
 
 
 def get_client() -> "TaskPilotClient":
@@ -109,6 +129,11 @@ class TaskPilotClient:
 			if not page.get("next_page_results"):
 				return results
 			cursor = page.get("next_cursor")
+			if not cursor:
+				# Malformed page: next_page_results says there's more but no cursor to fetch it
+				# with. Without this, the next loop iteration would drop the (falsy) cursor and
+				# re-request the same first page forever. Return what we have instead of stalling.
+				return results
 
 	def invalidate_cache(self):
 		frappe.cache.delete_keys(f"taskpilot|{self.slug}|")
@@ -119,6 +144,10 @@ class TaskPilotClient:
 		return self.get_paginated("/projects/")
 
 	def project_uuid(self, identifier: str) -> str:
+		# The chokepoint every identifier-taking method below routes through (get_project,
+		# list_work_items, create_work_item, update_project, archive_project, states,
+		# ensure_state) - one guard here covers all of them.
+		_validate_identifier(identifier)
 		for p in self.list_projects():
 			if p.get("identifier") == identifier:
 				return p["id"]
@@ -141,6 +170,7 @@ class TaskPilotClient:
 	# ---- work items ----
 
 	def get_work_item(self, docname: str) -> dict:
+		_validate_docname(docname)
 		return self.get_cached(f"/work-items/{docname}/")
 
 	def list_work_items(self, project_identifier: str) -> list[dict]:
@@ -152,6 +182,7 @@ class TaskPilotClient:
 		)
 
 	def update_work_item(self, docname: str, payload: dict) -> dict:
+		_validate_docname(docname)
 		wi = self.get_work_item(docname)
 		return self.request("PATCH", f"/projects/{wi['project']}/work-items/{wi['id']}/", payload=payload)
 

@@ -4,6 +4,7 @@
 import re
 
 import frappe
+from frappe import _
 from frappe.utils import getdate, today
 
 STATUS_TO_STATE = {
@@ -38,10 +39,13 @@ def state_to_status(state: dict, work_item: dict) -> str:
 
 
 def work_item_to_task(wi, states_by_id, project_identifier, parent_docname=None, assignees=None):
+	sequence_id = wi.get("sequence_id")
+	if not sequence_id:
+		frappe.throw(_("TaskPilot work item {0} has no sequence_id").format(wi.get("id") or wi.get("name")))
 	state = states_by_id.get(wi.get("state")) or {}
 	return frappe._dict(
 		doctype="Task",
-		name=f"{project_identifier}-{wi['sequence_id']}",
+		name=f"{project_identifier}-{sequence_id}",
 		subject=wi.get("name"),
 		description=wi.get("description_html"),
 		status=state_to_status(state, wi),
@@ -56,7 +60,7 @@ def work_item_to_task(wi, states_by_id, project_identifier, parent_docname=None,
 		modified_by=None,
 		owner=None,
 		docstatus=0,
-		idx=wi.get("sequence_id") or 0,
+		idx=sequence_id,
 		_assign=frappe.as_json(assignees) if assignees else None,
 	)
 

@@ -141,8 +141,9 @@ def make_material_request(source_name: str, target_doc: str | dict | Document | 
 					"delivery_date": "schedule_date",
 					"bom_no": "bom_no",
 				},
-				"condition": lambda item: not is_product_bundle(item.item_code)
-				and get_remaining_qty(item) > 0,
+				"condition": lambda item: (
+					not is_product_bundle(item.item_code) and get_remaining_qty(item) > 0
+				),
 				"postprocess": update_item,
 			},
 		},
@@ -315,8 +316,10 @@ def make_delivery_note(
 		item_group = get_item_group_defaults(target.item_code, source_parent.company)
 
 		if item:
+			from erpnext.projects.taskpilot_client import get_fallback_cost_center
+
 			target.cost_center = (
-				frappe.db.get_value("Project", source_parent.project, "cost_center")
+				(get_fallback_cost_center() if source_parent.project else None)
 				or item.get("buying_cost_center")
 				or item_group.get("buying_cost_center")
 			)
@@ -494,7 +497,9 @@ def make_sales_invoice(
 		)
 
 		if source_parent.project:
-			target.cost_center = frappe.db.get_value("Project", source_parent.project, "cost_center")
+			from erpnext.projects.taskpilot_client import get_fallback_cost_center
+
+			target.cost_center = get_fallback_cost_center()
 		if target.item_code:
 			item = get_item_defaults(target.item_code, source_parent.company)
 			item_group = get_item_group_defaults(target.item_code, source_parent.company)
@@ -570,12 +575,14 @@ def make_sales_invoice(
 				},
 				"postprocess": update_item,
 				"condition": lambda doc: (
-					True
-					if is_unit_price_row(doc)
-					else (doc.qty and (doc.base_amount == 0 or abs(doc.billed_amt) < abs(doc.amount)))
-				)
-				and select_item(doc)
-				and not args.get("skip_item_mapping"),
+					(
+						True
+						if is_unit_price_row(doc)
+						else (doc.qty and (doc.base_amount == 0 or abs(doc.billed_amt) < abs(doc.amount)))
+					)
+					and select_item(doc)
+					and not args.get("skip_item_mapping")
+				),
 			},
 			"Sales Taxes and Charges": {
 				"doctype": "Sales Taxes and Charges",
@@ -803,8 +810,9 @@ def make_purchase_order(
 						"pricing_rules",
 					],
 					"postprocess": update_item_for_packed_item,
-					"condition": lambda doc: doc.parent_item in item_codes
-					and flt(doc.ordered_qty) < flt(doc.qty),
+					"condition": lambda doc: (
+						doc.parent_item in item_codes and flt(doc.ordered_qty) < flt(doc.qty)
+					),
 				},
 			},
 			target_doc,

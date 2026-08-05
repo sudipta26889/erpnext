@@ -6,8 +6,8 @@ from datetime import timedelta
 import frappe
 from frappe.utils import get_datetime, today
 
-from erpnext.projects.doctype.timesheet.test_timesheet import make_timesheet
 from erpnext.projects.report.daily_timesheet_summary.daily_timesheet_summary import execute
+from erpnext.projects.tests.test_timesheet_core import make_timesheet
 from erpnext.setup.doctype.employee.test_employee import make_employee
 from erpnext.tests.utils import ERPNextTestSuite
 

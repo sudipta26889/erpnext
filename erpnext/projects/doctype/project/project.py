@@ -6,7 +6,13 @@ from frappe import _
 from frappe.model.document import Document
 
 from erpnext.projects.project_financials import compute_financials
-from erpnext.projects.taskpilot_client import TaskPilotNotFound, get_client, is_enabled
+from erpnext.projects.taskpilot_client import (
+	TaskPilotError,
+	TaskPilotNotFound,
+	get_client,
+	is_enabled,
+	is_lenient,
+)
 from erpnext.projects.taskpilot_mapping import make_identifier, project_to_payload, tp_to_project
 
 
@@ -16,6 +22,8 @@ class Project(Document):
 
 	def load_from_db(self):
 		if not is_enabled():
+			if is_lenient():
+				return self._load_stub()
 			raise frappe.DoesNotExistError(
 				_("Project {0} is not available (TaskPilot integration disabled)").format(self.name)
 			)
@@ -24,10 +32,29 @@ class Project(Document):
 			tp_project = client.get_project(self.name)
 		except TaskPilotNotFound:
 			raise frappe.DoesNotExistError(_("Project {0} not found").format(self.name))
+		except TaskPilotError:
+			if is_lenient():
+				return self._load_stub()
+			raise
 		d = tp_to_project(tp_project)
 		d.update(compute_financials(self.name))
 		d["percent_complete"] = compute_percent_complete(self.name, client=client)
 		super(Document, self).__init__(d)
+
+	def _load_stub(self):
+		# spec §5: transaction saves that only validate a project link must warn-and-proceed
+		# (not hard fail) when TaskPilot is disabled/unreachable and lenient_link_validation is
+		# on. Populate just enough of the doc for the link validator / a read-only render.
+		super(Document, self).__init__(
+			frappe._dict(
+				doctype="Project",
+				name=self.name,
+				project_name=self.name,
+				status="Open",
+				docstatus=0,
+				idx=0,
+			)
+		)
 
 	def db_insert(self, *args, **kwargs):
 		client = get_client()
@@ -169,6 +196,9 @@ def _status_values(args) -> list | None:
 @frappe.whitelist()
 def update_costing_and_billing(project: str) -> dict:
 	"""Kept for the existing form button; totals are computed on read now."""
+	# Doc-level read here would cost a full TaskPilot API round-trip just to gate a read;
+	# type-level "can this user read Projects at all" is the honest cheap check instead.
+	frappe.has_permission("Project", ptype="read", throw=True)
 	return compute_financials(project)
 
 

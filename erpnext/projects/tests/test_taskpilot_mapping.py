@@ -63,3 +63,12 @@ class TestMapping(TestCase):
 		self.assertEqual(
 			m.tp_to_project(dict(fixtures.PROJECT, archived_at="2026-08-04")).status, "Completed"
 		)
+
+	def test_missing_sequence_id_raises_clear_error(self):
+		wi = dict(fixtures.WORK_ITEM)
+		del wi["sequence_id"]
+		self.assertRaises(frappe.ValidationError, m.work_item_to_task, wi, self.states_by_id(), "WEBSITE")
+
+	def test_falsy_sequence_id_raises_clear_error(self):
+		wi = dict(fixtures.WORK_ITEM, sequence_id=0)
+		self.assertRaises(frappe.ValidationError, m.work_item_to_task, wi, self.states_by_id(), "WEBSITE")

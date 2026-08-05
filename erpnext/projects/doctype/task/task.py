@@ -5,8 +5,15 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 from frappe.model.mapper import get_mapped_doc
+from frappe.utils import getdate
 
-from erpnext.projects.taskpilot_client import TaskPilotNotFound, get_client, is_enabled
+from erpnext.projects.taskpilot_client import (
+	TaskPilotError,
+	TaskPilotNotFound,
+	get_client,
+	is_enabled,
+	is_lenient,
+)
 from erpnext.projects.taskpilot_mapping import (
 	STATUS_TO_STATE,
 	task_to_work_item_payload,
@@ -16,16 +23,22 @@ from erpnext.projects.taskpilot_mapping import (
 
 class Task(Document):
 	def load_from_db(self):
+		project_identifier = self.name.rsplit("-", 1)[0] if "-" in self.name else None
 		if not is_enabled():
+			if is_lenient():
+				return self._load_stub(project_identifier)
 			raise frappe.DoesNotExistError(
 				_("Task {0} is not available (TaskPilot integration disabled)").format(self.name)
 			)
 		client = get_client()
-		project_identifier = self.name.rsplit("-", 1)[0]
 		try:
 			wi = client.get_work_item(self.name)
 		except TaskPilotNotFound:
 			raise frappe.DoesNotExistError(_("Task {0} not found").format(self.name))
+		except TaskPilotError:
+			if is_lenient():
+				return self._load_stub(project_identifier)
+			raise
 		states = {s["id"]: s for s in client.states(project_identifier)}
 		parent_docname = (
 			client.work_item_identifier(project_identifier, wi["parent"]) if wi.get("parent") else None
@@ -33,6 +46,22 @@ class Task(Document):
 		emails = _assignee_emails(client, wi)
 		super(Document, self).__init__(
 			work_item_to_task(wi, states, project_identifier, parent_docname, emails)
+		)
+
+	def _load_stub(self, project_identifier):
+		# spec §5: transaction saves that only validate a task link must warn-and-proceed (not
+		# hard fail) when TaskPilot is disabled/unreachable and lenient_link_validation is on.
+		# Populate just enough of the doc for the link validator / a read-only render.
+		super(Document, self).__init__(
+			frappe._dict(
+				doctype="Task",
+				name=self.name,
+				subject=self.name,
+				project=project_identifier,
+				status="Open",
+				docstatus=0,
+				idx=0,
+			)
 		)
 
 	def validate(self):
@@ -91,7 +120,16 @@ class Task(Document):
 			return []
 		rows = _matching_rows(args)
 		start = int(args.get("start") or args.get("limit_start") or 0)
-		length = int(args.get("page_length") or args.get("limit_page_length") or 20)
+		if _has_date_range_filter(args):
+			# frappe.desk.calendar.get_events / the Gantt view filter Task by exp_start_date/
+			# exp_end_date range but never pass an explicit page_length - and frappe's virtual
+			# doctype dispatch (qb_query.py: `page_length or limit or limit_page_length or 20`)
+			# always fills in 20 before this method ever sees args, so "caller passed none" is
+			# indistinguishable here from "caller wants exactly 20". Honor the date-range intent
+			# instead: a calendar/Gantt window wants every matching row, not an arbitrary first 20.
+			length = 10**6
+		else:
+			length = int(args.get("page_length") or args.get("limit_page_length") or 20)
 		rows = rows[start : start + length]
 		if args.get("as_list"):
 			# frappe.desk.search calls get_list(as_list=True) for link-field dropdowns
@@ -123,6 +161,41 @@ def _assignee_emails(client, wi) -> list[str]:
 	return [e for e in (by_id.get(a) for a in wi["assignees"]) if e]
 
 
+_DATE_FIELDS = ("exp_start_date", "exp_end_date")
+# Plain lambdas rather than the stdlib `operator` module: this file already uses `operator` as
+# the loop-variable name for a filter tuple's comparator string everywhere else (see
+# _normalized_filters below), and shadowing that convention module-wide isn't worth avoiding
+# four one-line lambdas.
+_DATE_OPERATORS = {
+	">=": lambda a, b: a >= b,
+	"<=": lambda a, b: a <= b,
+	">": lambda a, b: a > b,
+	"<": lambda a, b: a < b,
+}
+
+
+def _has_date_range_filter(args) -> bool:
+	return any(
+		fieldname in _DATE_FIELDS and op in _DATE_OPERATORS
+		for fieldname, op, _value in _normalized_filters(args.get("filters"))
+	)
+
+
+def _apply_date_filters(args, rows: list) -> list:
+	"""Honor >=/<=/>/< filters on exp_start_date/exp_end_date - the shape
+	frappe.desk.calendar.get_events sends (via get_event_conditions_qb) for Gantt/Calendar
+	views. Rows with no value for a date-filtered field are excluded rather than treated as
+	a match, since getdate(None) has no meaningful ordering against a real date.
+	"""
+	for fieldname, op, value in _normalized_filters(args.get("filters")):
+		if fieldname not in _DATE_FIELDS or op not in _DATE_OPERATORS:
+			continue
+		wanted = getdate(value)
+		cmp = _DATE_OPERATORS[op]
+		rows = [r for r in rows if r.get(fieldname) and cmp(getdate(r[fieldname]), wanted)]
+	return rows
+
+
 def _matching_rows(args) -> list:
 	client = get_client()
 	projects = _values(args, "project")
@@ -136,6 +209,8 @@ def _matching_rows(args) -> list:
 		for wi in items:
 			parent_docname = uuid_to_docname.get(wi["parent"]) if wi.get("parent") else None
 			rows.append(work_item_to_task(wi, states, identifier, parent_docname))
+
+	rows = _apply_date_filters(args, rows)
 
 	statuses = _values(args, "status")
 	if statuses:

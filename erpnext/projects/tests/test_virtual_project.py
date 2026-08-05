@@ -91,6 +91,37 @@ class TestVirtualProject(IntegrationTestCase):
 		c.get_project.side_effect = TaskPilotNotFound("not found")
 		self.assertRaises(frappe.DoesNotExistError, frappe.get_doc, "Project", "NOPE")
 
+	@patch("erpnext.projects.doctype.project.project.is_enabled", return_value=False)
+	def test_disabled_strict_raises_does_not_exist(self, mock_is_enabled, mock_get_client):
+		with patch("erpnext.projects.doctype.project.project.is_lenient", return_value=False):
+			self.assertRaises(frappe.DoesNotExistError, frappe.get_doc, "Project", "WEBSITE")
+
+	@patch("erpnext.projects.doctype.project.project.is_enabled", return_value=False)
+	def test_disabled_lenient_returns_stub(self, mock_is_enabled, mock_get_client):
+		with patch("erpnext.projects.doctype.project.project.is_lenient", return_value=True):
+			doc = frappe.get_doc("Project", "WEBSITE")
+			self.assertEqual(doc.name, "WEBSITE")
+			self.assertEqual(doc.status, "Open")
+			self.assertEqual(doc.docstatus, 0)
+
+	def test_unreachable_lenient_returns_stub(self, mock_get_client):
+		from erpnext.projects.taskpilot_client import TaskPilotError
+
+		c = _mock_client(mock_get_client)
+		c.get_project.side_effect = TaskPilotError("unreachable")
+		with patch("erpnext.projects.doctype.project.project.is_lenient", return_value=True):
+			doc = frappe.get_doc("Project", "WEBSITE")
+			self.assertEqual(doc.name, "WEBSITE")
+			self.assertEqual(doc.status, "Open")
+
+	def test_unreachable_strict_propagates_error(self, mock_get_client):
+		from erpnext.projects.taskpilot_client import TaskPilotError
+
+		c = _mock_client(mock_get_client)
+		c.get_project.side_effect = TaskPilotError("unreachable")
+		with patch("erpnext.projects.doctype.project.project.is_lenient", return_value=False):
+			self.assertRaises(TaskPilotError, frappe.get_doc, "Project", "WEBSITE")
+
 	def test_negative_status_filter_is_ignored(self, mock_get_client):
 		c = _mock_client(mock_get_client)
 		archived = dict(fixtures.PROJECT, identifier="ARCHIVED", archived_at="2026-08-01T00:00:00Z")

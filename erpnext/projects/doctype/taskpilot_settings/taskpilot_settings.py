@@ -9,9 +9,7 @@ from frappe.model.document import Document
 class TaskPilotSettings(Document):
 	def validate(self):
 		has_credentials = (
-			self.api_url
-			and self.workspace_slug
-			and self.get_password("api_key", raise_exception=False)
+			self.api_url and self.workspace_slug and self.get_password("api_key", raise_exception=False)
 		)
 		if self.enabled and not has_credentials:
 			frappe.throw(_("API URL, Workspace Slug and API Key are required to enable TaskPilot."))
@@ -21,6 +19,7 @@ class TaskPilotSettings(Document):
 
 @frappe.whitelist()
 def test_connection() -> dict:
+	frappe.only_for(("System Manager", "Projects Manager"))
 	from erpnext.projects.taskpilot_client import get_client
 
 	client = get_client()

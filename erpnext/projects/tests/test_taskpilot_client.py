@@ -4,7 +4,12 @@ from unittest.mock import MagicMock, patch
 import frappe
 from frappe.tests import IntegrationTestCase
 
-from erpnext.projects.taskpilot_client import TaskPilotClient, TaskPilotError, get_client
+from erpnext.projects.taskpilot_client import (
+	TaskPilotClient,
+	TaskPilotError,
+	TaskPilotNotFound,
+	get_client,
+)
 from erpnext.projects.tests import fixtures
 
 
@@ -105,3 +110,25 @@ class TestTaskPilotClient(IntegrationTestCase):
 		method, url = mock_req.call_args[0]
 		self.assertEqual(method, "PATCH")
 		self.assertIn(f"/projects/{fixtures.PROJECT['id']}/work-items/{fixtures.WORK_ITEM['id']}/", url)
+
+	@patch("erpnext.projects.taskpilot_client.requests.request")
+	def test_get_work_item_rejects_malformed_docname(self, mock_req):
+		for bad in ("../../etc/passwd", "WEBSITE", "WEBSITE-", "WEBSITE-12/../x", ""):
+			self.assertRaises(TaskPilotNotFound, _client().get_work_item, bad)
+		mock_req.assert_not_called()
+
+	@patch("erpnext.projects.taskpilot_client.requests.request")
+	def test_update_work_item_rejects_malformed_docname(self, mock_req):
+		self.assertRaises(TaskPilotNotFound, _client().update_work_item, "../etc/passwd", {})
+		mock_req.assert_not_called()
+
+	@patch("erpnext.projects.taskpilot_client.requests.request")
+	def test_project_uuid_rejects_malformed_identifier(self, mock_req):
+		for bad in ("../../etc/passwd", "WEB SITE", "WEBSITE/x", ""):
+			self.assertRaises(TaskPilotNotFound, _client().project_uuid, bad)
+		mock_req.assert_not_called()
+
+	@patch("erpnext.projects.taskpilot_client.requests.request")
+	def test_get_project_rejects_malformed_identifier(self, mock_req):
+		self.assertRaises(TaskPilotNotFound, _client().get_project, "../../etc/passwd")
+		mock_req.assert_not_called()
