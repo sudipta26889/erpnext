@@ -157,9 +157,9 @@ def make_material_request(source_name: str, target_doc: str | dict | Document | 
 
 @frappe.whitelist()
 def make_project(source_name: str, target_doc: str | dict | Document | None = None):
-	def postprocess(source, doc):
-		doc.project_type = "External"
-		doc.project_name = source.name
+	def set_missing_values(source, target):
+		# spec §3.6: the reverse SO pointer rides TaskPilot's external_id
+		target.external_id = source.name
 
 	doc = get_mapped_doc(
 		"Sales Order",
@@ -167,18 +167,12 @@ def make_project(source_name: str, target_doc: str | dict | Document | None = No
 		{
 			"Sales Order": {
 				"doctype": "Project",
-				"validation": {"docstatus": ["=", 1]},
-				"field_map": {
-					"name": "sales_order",
-					"base_grand_total": "estimated_costing",
-					"net_total": "total_sales_amount",
-				},
-			},
+				"field_map": {"name": "project_name", "delivery_date": "expected_end_date"},
+			}
 		},
 		target_doc,
-		postprocess,
+		postprocess=set_missing_values,
 	)
-
 	return doc
 
 
