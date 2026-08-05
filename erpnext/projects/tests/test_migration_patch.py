@@ -27,6 +27,7 @@ def _mock_client():
 	)
 	client.ensure_state.return_value = {"id": "state-1"}
 	client.get_work_item.return_value = {"id": "wi-uuid"}
+	client.list_work_items.return_value = []
 	return client
 
 
@@ -74,6 +75,24 @@ class TestPushProjectsIdempotency(IntegrationTestCase):
 		self.assertEqual(project_map["OLD-PROJ"], payload["identifier"])
 		client.archive_project.assert_called_once_with(payload["identifier"])
 
+	def test_identifier_collision_throws_before_any_push(self):
+		"""Two legacy projects whose names collapse to the same TaskPilot identifier
+		(make_identifier strips punctuation/case) must abort the whole push - not let one silently
+		clobber the other in TaskPilot."""
+		client = _mock_client()
+		rows = [
+			frappe._dict(name="OLD-1", project_name="Foo Bar!!!", notes=None, status="Open"),
+			frappe._dict(name="OLD-2", project_name="foo-bar", notes=None, status="Open"),
+		]
+		# ponytail: frappe.throw()'s message formatting reads System Settings; warm its meta cache
+		# before frappe.db.sql gets blanket-mocked below, or that internal read gets our fake rows.
+		frappe.get_meta("System Settings")
+		with patch.object(frappe.db, "sql", return_value=rows):
+			with self.assertRaises(frappe.ValidationError):
+				patch_module._push_projects(client, existing={})
+
+		client.create_project.assert_not_called()
+
 
 class TestPushTasksMapping(IntegrationTestCase):
 	def test_push_tasks_links_parent_and_maps_status(self):
@@ -100,6 +119,19 @@ class TestPushTasksMapping(IntegrationTestCase):
 				parent_task="OLD-PARENT",
 				project="OLDPROJ",
 			),
+		]
+		client = _mock_client()
+		with patch.object(frappe.db, "sql", return_value=rows):
+			task_map = patch_module._push_tasks(client, project_map={"OLDPROJ": "NEWPROJ"})
+
+		self.assertEqual(set(task_map), {"OLD-PARENT", "OLD-CHILD"})
+		# the child's parent link is patched in once the parent's TaskPilot uuid is known
+		client.update_work_item.assert_called_once_with(task_map["OLD-CHILD"], {"parent": "wi-uuid"})
+
+	def test_push_tasks_throws_on_orphan_project(self):
+		"""A task referencing a project that was never migrated must abort before any push - and
+		well before the irreversible DROP TABLE - not get silently dropped via a stdout print()."""
+		rows = [
 			frappe._dict(
 				name="ORPHAN",
 				subject="No project",
@@ -113,13 +145,38 @@ class TestPushTasksMapping(IntegrationTestCase):
 			),
 		]
 		client = _mock_client()
+		# ponytail: same System-Settings-meta-cache warm-up as the collision test above - frappe.throw()
+		# needs it, and it'd otherwise be read through the frappe.db.sql mock below.
+		frappe.get_meta("System Settings")
+		with patch.object(frappe.db, "sql", return_value=rows):
+			with self.assertRaises(frappe.ValidationError):
+				patch_module._push_tasks(client, project_map={})
+
+		client.create_work_item.assert_not_called()
+
+	def test_push_tasks_skips_existing_external_id(self):
+		"""A task whose external_id already exists as a TaskPilot work item (prior partial run) is
+		not re-created; task_map still gets the existing docname so parent-linking keeps working."""
+		rows = [
+			frappe._dict(
+				name="OLD-TASK",
+				subject="Task",
+				description=None,
+				status="Open",
+				priority="Low",
+				exp_start_date=None,
+				exp_end_date=None,
+				parent_task=None,
+				project="OLDPROJ",
+			),
+		]
+		client = _mock_client()
+		client.list_work_items.return_value = [{"external_id": "OLD-TASK", "sequence_id": 7}]
 		with patch.object(frappe.db, "sql", return_value=rows):
 			task_map = patch_module._push_tasks(client, project_map={"OLDPROJ": "NEWPROJ"})
 
-		# the orphan (project never migrated) is skipped, not pushed
-		self.assertEqual(set(task_map), {"OLD-PARENT", "OLD-CHILD"})
-		# the child's parent link is patched in once the parent's TaskPilot uuid is known
-		client.update_work_item.assert_called_once_with(task_map["OLD-CHILD"], {"parent": "wi-uuid"})
+		client.create_work_item.assert_not_called()
+		self.assertEqual(task_map["OLD-TASK"], "NEWPROJ-7")
 
 
 class TestRemapLinks(IntegrationTestCase):
@@ -145,6 +202,48 @@ class TestRemapLinks(IntegrationTestCase):
 	def test_remap_noop_for_missing_table(self):
 		# doesn't throw for a doctype whose table doesn't exist at patch runtime
 		patch_module._remap("Nonexistent Doctype For Migration Test", "project", {"OLD": "NEW"})
+
+	def test_link_columns_finds_metadata_driven_target(self):
+		"""_link_columns replaces the old hardcoded PROJECT_LINK_COLUMNS list - it must find a
+		known Link-to-Project column (Issue.project) via DocField metadata, and never return the
+		target doctype itself or the other legacy doctype (Project/Task self-references)."""
+		columns = patch_module._link_columns("Project")
+
+		self.assertIn(("Issue", "project"), columns)
+		doctypes = {doctype for doctype, _ in columns}
+		self.assertNotIn("Project", doctypes)
+		self.assertNotIn("Task", doctypes)
+
+	def test_remap_dynamic_updates_matching_type_only(self):
+		"""tabToDo.reference_name isn't a Link field, so _link_columns can't see it - _remap_dynamic
+		covers it directly. The type_col filter must matter: a same-named row of the *other* type
+		is left untouched."""
+		frappe.db.sql(
+			"insert into `tabToDo` (name, reference_type, reference_name) values (%s, %s, %s)",
+			("TEST-MIGRATION-TODO-PROJ", "Project", "OLDPROJ"),
+		)
+		frappe.db.sql(
+			"insert into `tabToDo` (name, reference_type, reference_name) values (%s, %s, %s)",
+			("TEST-MIGRATION-TODO-TASK", "Task", "OLDPROJ"),
+		)
+		frappe.db.commit()
+
+		def _cleanup():
+			frappe.db.sql(
+				"delete from `tabToDo` where name in (%s, %s)",
+				("TEST-MIGRATION-TODO-PROJ", "TEST-MIGRATION-TODO-TASK"),
+			)
+			frappe.db.commit()
+
+		self.addCleanup(_cleanup)
+
+		patch_module._remap_dynamic(
+			"ToDo", {"OLDPROJ": "NEWPROJ"}, "reference_type", "reference_name", "Project"
+		)
+
+		self.assertEqual(frappe.db.get_value("ToDo", "TEST-MIGRATION-TODO-PROJ", "reference_name"), "NEWPROJ")
+		# reference_type="Task" row was not touched by the "Project" remap despite the same name
+		self.assertEqual(frappe.db.get_value("ToDo", "TEST-MIGRATION-TODO-TASK", "reference_name"), "OLDPROJ")
 
 
 class TestShortCircuitDropsEmptyTables(IntegrationTestCase):
