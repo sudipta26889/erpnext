@@ -217,8 +217,6 @@ website_route_rules = [
 			"parents": [{"label": "Material Request", "route": "material-requests"}],
 		},
 	},
-	{"from_route": "/project", "to_route": "Project"},
-	{"from_route": "/tasks", "to_route": "Task"},
 	{"from_route": "/banking/<path:app_path>", "to_route": "banking"},
 ]
 
@@ -234,7 +232,6 @@ standard_navbar_items = [
 ]
 
 standard_portal_menu_items = [
-	{"title": "Projects", "route": "/project", "reference_doctype": "Project", "role": "Customer"},
 	{
 		"title": "Request for Quotations",
 		"route": "/rfq",
@@ -332,7 +329,6 @@ has_website_permission = {
 	"Delivery Note": "erpnext.controllers.website_list_for_contact.has_website_permission",
 	"Issue": "erpnext.support.doctype.issue.issue.has_website_permission",
 	"Timesheet": "erpnext.controllers.website_list_for_contact.has_website_permission",
-	"Project": "erpnext.controllers.website_list_for_contact.has_website_permission",
 }
 
 

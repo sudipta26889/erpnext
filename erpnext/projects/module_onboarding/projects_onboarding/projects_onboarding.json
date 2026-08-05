@@ -12,7 +12,7 @@
  "doctype": "Module Onboarding",
  "idx": 0,
  "is_complete": 0,
- "modified": "2026-02-25 16:59:59.005097",
+ "modified": "2026-08-05 17:03:34.949780",
  "modified_by": "Administrator",
  "module": "Projects",
  "name": "Projects Onboarding",
@@ -26,9 +26,6 @@
   },
   {
    "step": "Create Timesheet"
-  },
-  {
-   "step": "View Project Summary"
   }
  ],
  "title": "Projects Setup"
