@@ -545,6 +545,11 @@ def get_timesheets_list(doctype, txt, filters, limit_start, limit_page_length=20
 
 	if customer:
 		sales_invoices = frappe.get_all("Sales Invoice", filters={"customer": customer}, pluck="name")
+		if not sales_invoices:
+			# No invoices -> `conditions` below would stay empty -> `if conditions:` skips the
+			# where-clause -> every Timesheet leaks to this customer's portal. `[]` (not the `{}`
+			# below) since this branch's success path returns `query.run(as_dict=True)`, a list.
+			return []
 
 		# Return timesheet related data to web portal.
 		table = frappe.qb.DocType("Timesheet")

@@ -133,6 +133,39 @@ class TestVirtualTask(IntegrationTestCase):
 		)
 		self.assertEqual([r.name for r in rows], ["WEBSITE-12"])
 
+	def test_get_list_date_range_filter_with_pypika_term_fieldname(self, mock_get_client):
+		# frappe.desk.calendar.get_events (frappe/desk/calendar.py, ~lines 63-70) builds its
+		# date-range filter rows with the fieldname slot holding a PyPika term, not a string:
+		#   functions.IfNull(dt[field_map.start], ValueWrapper("0001-01-01 00:00:00"))
+		# Reproduce that exact shape (same frappe.query_builder pieces, not a stand-in) and
+		# confirm the date window is still honored instead of every row being excluded.
+		from frappe.query_builder import functions
+		from frappe.query_builder.terms import ValueWrapper
+
+		c = _mock(mock_get_client)
+		other = dict(
+			fixtures.WORK_ITEM,
+			id="33333333-3333-3333-3333-333333333333",
+			sequence_id=13,
+			start_date="2026-09-01",
+			target_date="2026-09-10",
+		)
+		c.list_work_items.return_value = [fixtures.WORK_ITEM, other]
+		from erpnext.projects.doctype.task.task import Task
+
+		dt = frappe.qb.DocType("Task")
+		start_field = functions.IfNull(dt["exp_start_date"], ValueWrapper("0001-01-01 00:00:00"))
+		end_field = functions.IfNull(dt["exp_end_date"], ValueWrapper("2199-12-31 00:00:00"))
+		rows = Task.get_list(
+			{
+				"filters": [
+					[start_field, "<=", "2026-08-25"],
+					[end_field, ">=", "2026-08-15"],
+				]
+			}
+		)
+		self.assertEqual([r.name for r in rows], ["WEBSITE-12"])
+
 	def test_get_list_date_range_filter_excludes_none_dates(self, mock_get_client):
 		c = _mock(mock_get_client)
 		no_dates = dict(

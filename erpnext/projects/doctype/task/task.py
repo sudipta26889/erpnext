@@ -233,26 +233,62 @@ def _matching_rows(args) -> list:
 	return rows
 
 
+def _unwrap_fieldname(fieldname):
+	"""Return the plain string fieldname for a filter row's fieldname slot.
+
+	frappe.desk.calendar.get_events (frappe/desk/calendar.py get_events, via
+	get_event_conditions_qb -> frappe.get_list) sends the calendar/Gantt date-range filter
+	with the fieldname slot holding a PyPika term, not a string - e.g.
+	`functions.IfNull(dt["exp_start_date"], ValueWrapper("0001-01-01 00:00:00"))`. PyPika's
+	Term.__eq__ (pypika.terms, pypika==0.48.9) returns a BasicCriterion, an always-truthy
+	object, rather than True/False - so `fieldname in _DATE_FIELDS` and any `fieldname ==
+	"..."` check involving such a term is truthy for EVERY string, not just a real match.
+	Left unhandled, every filter row looks like a match against every field name.
+
+	Unwrap via Term.fields_() (pypika.terms.Term.fields_, inherited by Function/Field/
+	Criterion), which walks the term's node tree (nodes_()) back to the Field node(s) it
+	wraps. If exactly one Field is found, its .name is the real fieldname. Anything else
+	(zero fields, more than one - ambiguous, or not a PyPika term at all) is not a shape we
+	can safely resolve, so the row is skipped rather than guessed at.
+	"""
+	if isinstance(fieldname, str):
+		return fieldname
+	fields_ = getattr(fieldname, "fields_", None)
+	if not callable(fields_):
+		return None
+	try:
+		found = fields_()
+	except Exception:
+		return None
+	if len(found) != 1:
+		return None
+	return next(iter(found)).name
+
+
 def _normalized_filters(filters):
 	"""Yield (fieldname, operator, value) from frappe's list/dict filter shapes.
 
 	List rows come as either [fieldname, operator, value] or
 	[doctype, fieldname, operator, value]; anything shorter or longer is
-	not a recognized shape and is skipped rather than guessed at.
+	not a recognized shape and is skipped rather than guessed at. fieldname is normalized
+	to a plain string via _unwrap_fieldname (see there for why it isn't always one already);
+	rows whose fieldname can't be resolved to a single string are skipped.
 	"""
 	filters = filters or []
 	if isinstance(filters, dict):
-		for k, v in filters.items():
-			if isinstance(v, (list, tuple)) and len(v) == 2:
-				yield (k, v[0], v[1])
-			else:
-				yield (k, "=", v)
-		return
-	for f in filters:
-		if len(f) == 3:
-			yield (f[0], f[1], f[2])
-		elif len(f) == 4:
-			yield (f[1], f[2], f[3])
+		rows = (
+			(k, v[0], v[1]) if isinstance(v, (list, tuple)) and len(v) == 2 else (k, "=", v)
+			for k, v in filters.items()
+		)
+	else:
+		rows = (
+			(f[0], f[1], f[2]) if len(f) == 3 else (f[1], f[2], f[3]) for f in filters if len(f) in (3, 4)
+		)
+	for fieldname, operator, value in rows:
+		fieldname = _unwrap_fieldname(fieldname)
+		if fieldname is None:
+			continue
+		yield (fieldname, operator, value)
 
 
 def _values(args, fieldname: str) -> list | None:

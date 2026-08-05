@@ -2,6 +2,8 @@
 # License: GNU General Public License v3. See license.txt
 
 
+import unittest
+
 import frappe
 from frappe.query_builder.functions import Sum
 from frappe.utils import add_days, cint, flt, getdate, nowdate, today
@@ -19,7 +21,6 @@ from erpnext.buying.doctype.supplier.test_supplier import create_supplier
 from erpnext.controllers.accounts_controller import InvalidQtyError, get_payment_terms
 from erpnext.controllers.buying_controller import QtyMismatchError
 from erpnext.exceptions import InvalidCurrency
-from erpnext.projects.doctype.project.test_project import make_project
 from erpnext.stock.doctype.item.test_item import create_item
 from erpnext.stock.doctype.material_request.mapper import make_purchase_order
 from erpnext.stock.doctype.material_request.test_material_request import make_material_request
@@ -38,6 +39,16 @@ from erpnext.stock.doctype.serial_and_batch_bundle.test_serial_and_batch_bundle 
 from erpnext.stock.doctype.stock_entry.test_stock_entry import get_qty_after_transaction
 from erpnext.stock.tests.test_utils import StockTestMixin
 from erpnext.tests.utils import ERPNextTestSuite
+
+try:
+	from erpnext.projects.doctype.project.test_project import make_project
+except ImportError:
+	# erpnext.projects.doctype.project.test_project was deleted by 11a0f1c230 (Project became a
+	# TaskPilot-backed virtual doctype with no local test fixture module). Only the two tests
+	# below use make_project; they're skipped when it's unavailable instead of failing this
+	# whole module's collection, so `bench run-tests --app erpnext` (no module filter) still
+	# collects this file.
+	make_project = None
 
 
 class TestPurchaseInvoice(ERPNextTestSuite, StockTestMixin):
@@ -706,6 +717,7 @@ class TestPurchaseInvoice(ERPNextTestSuite, StockTestMixin):
 			)
 		)
 
+	@unittest.skipIf(make_project is None, "erpnext.projects.doctype.project.test_project was removed")
 	def test_total_purchase_cost_for_project(self):
 		if not frappe.db.exists("Project", {"project_name": "_Test Project for Purchase"}):
 			project = make_project({"project_name": "_Test Project for Purchase"})
@@ -717,7 +729,7 @@ class TestPurchaseInvoice(ERPNextTestSuite, StockTestMixin):
 			filters={"project": project.name, "docstatus": 1},
 			fields=[{"SUM": "base_net_amount", "as": "base_net_amount"}],
 		)
-		existing_purchase_cost = existing_purchase_cost and existing_purchase_cost[0].base_net_amount or 0
+		existing_purchase_cost = (existing_purchase_cost and existing_purchase_cost[0].base_net_amount) or 0
 
 		pi = make_purchase_invoice(currency="USD", conversion_rate=60, project=project.name)
 		self.assertEqual(
@@ -1288,6 +1300,7 @@ class TestPurchaseInvoice(ERPNextTestSuite, StockTestMixin):
 		for gle in gl_entries:
 			self.assertEqual(expected_values[gle.account]["cost_center"], gle.cost_center)
 
+	@unittest.skipIf(make_project is None, "erpnext.projects.doctype.project.test_project was removed")
 	def test_purchase_invoice_with_project_link(self):
 		project = make_project(
 			{
