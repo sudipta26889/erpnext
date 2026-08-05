@@ -79,7 +79,7 @@ class Project(Document):
 			wants_relevance = any(isinstance(f, dict) and f.get("as") == "_relevance" for f in fields)
 			result = [[r.name, r.project_name] for r in rows]
 			if wants_relevance:
-				result = [row + [0] for row in result]
+				result = [[*row, 0] for row in result]
 			return result
 		return rows
 
