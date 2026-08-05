@@ -5,6 +5,7 @@ import frappe
 from frappe.tests import IntegrationTestCase
 
 from erpnext.projects.taskpilot_client import TaskPilotClient, TaskPilotError, get_client
+from erpnext.projects.tests import fixtures
 
 
 def _resp(status=200, body=None, headers=None):
@@ -72,3 +73,35 @@ class TestTaskPilotClient(IntegrationTestCase):
 		]
 		out = _client().get_paginated("/projects/x/work-items/")
 		self.assertEqual([r["id"] for r in out], [1, 2])
+
+	@patch("erpnext.projects.taskpilot_client.requests.request")
+	def test_project_uuid_resolves_from_list(self, mock_req):
+		mock_req.return_value = _resp(body=[fixtures.PROJECT])
+		c = _client()
+		self.assertEqual(c.project_uuid("WEBSITE"), fixtures.PROJECT["id"])
+		self.assertRaises(TaskPilotError, c.project_uuid, "NOPE")
+
+	@patch("erpnext.projects.taskpilot_client.requests.request")
+	def test_get_work_item_by_docname(self, mock_req):
+		mock_req.return_value = _resp(body=fixtures.WORK_ITEM)
+		_client().get_work_item("WEBSITE-12")
+		self.assertIn("/workspaces/erpnext/work-items/WEBSITE-12/", mock_req.call_args[0][1])
+
+	@patch("erpnext.projects.taskpilot_client.requests.request")
+	def test_ensure_state_creates_missing(self, mock_req):
+		mock_req.side_effect = [
+			_resp(body=[fixtures.PROJECT]),
+			_resp(body=[s for s in fixtures.STATES if s["name"] != "Pending Review"]),
+			_resp(status=201, body=fixtures.STATES[3]),
+		]
+		out = _client().ensure_state("WEBSITE", "Pending Review", "started")
+		self.assertEqual(out["name"], "Pending Review")
+		self.assertEqual(mock_req.call_args[0][0], "POST")
+
+	@patch("erpnext.projects.taskpilot_client.requests.request")
+	def test_update_work_item_patches_by_uuid(self, mock_req):
+		mock_req.side_effect = [_resp(body=fixtures.WORK_ITEM), _resp(body=fixtures.WORK_ITEM)]
+		_client().update_work_item("WEBSITE-12", {"priority": "low"})
+		method, url = mock_req.call_args[0]
+		self.assertEqual(method, "PATCH")
+		self.assertIn(f"/projects/{fixtures.PROJECT['id']}/work-items/{fixtures.WORK_ITEM['id']}/", url)
