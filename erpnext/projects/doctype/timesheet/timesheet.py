@@ -167,28 +167,25 @@ class Timesheet(Document):
 				frappe.throw(_("Row {0}: Hours value must be greater than zero.").format(data.idx))
 
 	def update_task_and_project(self):
-		tasks, projects = [], []
+		"""Push completion state to TaskPilot; totals are computed on read now."""
+		from erpnext.projects.taskpilot_client import TaskPilotError, get_client
+		from erpnext.projects.taskpilot_mapping import STATUS_TO_STATE
 
+		seen = set()
 		for data in self.time_logs:
-			if data.task and data.task not in tasks:
-				task = frappe.get_doc("Task", data.task)
-				task.update_time_and_costing()
-				time_logs_completed = all(tl.completed for tl in self.time_logs if tl.task == task.name)
-
-				if time_logs_completed:
-					task.status = "Completed"
-				else:
-					task.status = "Working"
-				task.save(ignore_permissions=True)
-				tasks.append(data.task)
-
-			if data.project and data.project not in projects:
-				projects.append(data.project)
-
-		for project in projects:
-			project_doc = frappe.get_doc("Project", project)
-			project_doc.update_project()
-			project_doc.save(ignore_permissions=True)
+			if not data.task or data.task in seen:
+				continue
+			seen.add(data.task)
+			completed = all(tl.completed for tl in self.time_logs if tl.task == data.task)
+			status = "Completed" if completed and self.docstatus == 1 else "Working"
+			name, group = STATUS_TO_STATE[status]
+			try:
+				client = get_client()
+				project_identifier = data.task.rsplit("-", 1)[0]
+				state = client.ensure_state(project_identifier, name, group)
+				client.update_work_item(data.task, {"state": state["id"]})
+			except TaskPilotError as e:
+				frappe.msgprint(str(e), indicator="orange", alert=True)
 
 	def validate_dates(self):
 		for time_log in self.time_logs:

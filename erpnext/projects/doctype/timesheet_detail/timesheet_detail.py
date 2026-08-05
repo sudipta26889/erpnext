@@ -53,9 +53,9 @@ class TimesheetDetail(Document):
 			self.to_time = _to_time
 
 	def set_project(self):
-		"""Set project based on task."""
+		"""Set project based on task. Task docnames follow the PROJECT-seq convention."""
 		if self.task and not self.project:
-			self.project = frappe.db.get_value("Task", self.task, "project")
+			self.project = self.task.rsplit("-", 1)[0]
 
 	def calculate_hours(self):
 		"""Calculate hours based on from_time and to_time."""
@@ -117,15 +117,13 @@ class TimesheetDetail(Document):
 			)
 
 	def validate_task_project(self):
-		"""Validate that the the task belongs to the project specified in the timesheet detail."""
-		if self.task and self.project:
-			task_project = frappe.db.get_value("Task", self.task, "project")
-			if task_project and task_project != self.project:
-				frappe.throw(
-					_("Row {0}: Task {1} does not belong to Project {2}").format(
-						self.idx, frappe.bold(self.task), frappe.bold(self.project)
-					)
+		"""Validate that the task belongs to the project specified in the timesheet detail."""
+		if self.task and self.project and self.task.rsplit("-", 1)[0] != self.project:
+			frappe.throw(
+				_("Row {0}: Task {1} does not belong to Project {2}").format(
+					self.idx, frappe.bold(self.task), frappe.bold(self.project)
 				)
+			)
 
 	def validate_billing_hours(self):
 		"""Warn if billing hours are more than actual hours."""
