@@ -54,7 +54,13 @@ frappe.ui.form.on("Project", {
 				frm.add_custom_button(
 					__("Kanban Board"),
 					() => {
-						frappe.set_route("List", "Task", "Kanban", frm.doc.project_name);
+						// ponytail: routes to the plain filtered Task list, not the Kanban
+						// view itself — KanbanView.show() unconditionally resets
+						// frappe.route_options before before_refresh() can read it, so a
+						// "List/Task/Kanban" route silently drops the project filter
+						// (frappe/public/js/frappe/views/kanban/kanban_view.js show()).
+						frappe.route_options = { project: frm.doc.name };
+						frappe.set_route("List", "Task");
 					},
 					__("View")
 				);
@@ -70,8 +76,8 @@ frappe.ui.form.on("Project", {
 			freeze_message: __("Updating Costing and Billing fields against this Project..."),
 			callback: function (r) {
 				if (r && !r.exc) {
-					frappe.msgprint(__("Costing and Billing fields have been updated"));
-					frm.refresh();
+					frappe.show_alert(__("Refreshed"));
+					frm.reload_doc();
 				}
 			},
 		});

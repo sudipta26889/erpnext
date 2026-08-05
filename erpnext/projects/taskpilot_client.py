@@ -14,6 +14,10 @@ class TaskPilotError(frappe.ValidationError):
 	pass
 
 
+class TaskPilotNotFound(TaskPilotError):
+	pass
+
+
 def _parse_json(resp, url):
 	"""Parse JSON response, raising TaskPilotError on invalid JSON."""
 	try:
@@ -22,6 +26,10 @@ def _parse_json(resp, url):
 		raise TaskPilotError(
 			_("TaskPilot returned a non-JSON response from {0}: {1}").format(url, resp.text[:500])
 		) from e
+
+
+def is_enabled() -> bool:
+	return bool(frappe.get_cached_doc("TaskPilot Settings").enabled)
 
 
 def get_client() -> "TaskPilotClient":
@@ -109,7 +117,7 @@ class TaskPilotClient:
 		for p in self.list_projects():
 			if p.get("identifier") == identifier:
 				return p["id"]
-		raise TaskPilotError(
+		raise TaskPilotNotFound(
 			_("TaskPilot project {0} not found in workspace {1}").format(identifier, self.slug)
 		)
 
