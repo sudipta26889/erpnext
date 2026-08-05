@@ -76,7 +76,7 @@ class Task(Document):
 		fields = args.get("fields") or []
 		aggregate_spec = None
 		for field in fields:
-			if isinstance(field, dict):
+			if isinstance(field, dict) and "COUNT" in field:
 				aggregate_spec = field
 				break
 
@@ -95,8 +95,14 @@ class Task(Document):
 		rows = rows[start : start + length]
 		if args.get("as_list"):
 			# frappe.desk.search calls get_list(as_list=True) for link-field dropdowns
-			# (e.g. Task.parent_task) and indexes the result positionally.
-			return [[r.name, r.subject] for r in rows]
+			# and indexes the result positionally. Detect whether the caller requested
+			# the relevance expression; if so, append a trailing 0 (frappe.desk.search
+			# strips the last column: search.py).
+			wants_relevance = any(isinstance(f, dict) and f.get("as") == "_relevance" for f in fields)
+			result = [[r.name, r.subject] for r in rows]
+			if wants_relevance:
+				result = [row + [0] for row in result]
+			return result
 		return rows
 
 	@staticmethod

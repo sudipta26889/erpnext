@@ -98,6 +98,17 @@ class TestVirtualTask(IntegrationTestCase):
 		rows = Task.get_list(
 			{
 				"or_filters": [["Task", "subject", "like", "%homepage%"]],
+				"fields": ["name", "subject", {"IFNULL": ["locate('x', name)", -9999], "as": "_relevance"}],
+				"as_list": True,
+				"page_length": 20,
+			}
+		)
+		self.assertEqual(rows, [["WEBSITE-12", "Design homepage", 0]])
+
+		# Without the relevance dict in fields, rows have no trailing 0
+		rows = Task.get_list(
+			{
+				"or_filters": [["Task", "subject", "like", "%homepage%"]],
 				"as_list": True,
 				"page_length": 20,
 			}

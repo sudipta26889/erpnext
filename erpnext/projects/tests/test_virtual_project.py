@@ -109,6 +109,21 @@ class TestVirtualProject(IntegrationTestCase):
 		rows = Project.get_list(
 			{
 				"or_filters": [["Project", "project_name", "like", "%revamp%"]],
+				"fields": [
+					"name",
+					"project_name",
+					{"IFNULL": ["locate('x', name)", -9999], "as": "_relevance"},
+				],
+				"as_list": True,
+				"page_length": 20,
+			}
+		)
+		self.assertEqual(rows, [["WEBSITE", "Website Revamp", 0]])
+
+		# Without the relevance dict in fields, rows have no trailing 0
+		rows = Project.get_list(
+			{
+				"or_filters": [["Project", "project_name", "like", "%revamp%"]],
 				"as_list": True,
 				"page_length": 20,
 			}
