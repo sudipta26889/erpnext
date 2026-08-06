@@ -1,7 +1,8 @@
 # TaskPilot ERPNext (fork) - production stack.
 #
-# Generated (not hand-written) from frappe/frappe_docker's own compose files, vendored unmodified
-# in ./frappe_docker, via the exact command frappe_docker's docs recommend for a custom build:
+# Originally generated (not hand-written) from frappe/frappe_docker's own compose files, vendored
+# unmodified in ./frappe_docker, via the exact command frappe_docker's docs recommend for a custom
+# build:
 #
 #   cd frappe_docker && docker compose --env-file ../.env \
 #     -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml \
@@ -11,13 +12,19 @@
 # file) while still resolving the override merges. NOTE: a top-level `include:` pointing at the
 # same 4 files was tried first and silently dropped the override files' values (e.g. configurator
 # kept DB_HOST empty instead of "db") - this compose version's `include:` merge order doesn't
-# match plain multi -f behavior for this case, so we generate a flat file instead. Re-run the
-# command above (after `git -C frappe_docker pull`) any time frappe_docker's upstream files change.
+# match plain multi -f behavior for this case, so we generate a flat file instead. If you ever
+# regenerate this file from upstream, drop `overrides/compose.redis.yaml` from the -f list (or
+# re-apply the redis-externalization edit below) since redis-cache/redis-queue are no longer used
+# here.
+#
+# Redis cutover (this edit): the bundled redis-cache/redis-queue containers were removed. The
+# configurator now points REDIS_CACHE/REDIS_QUEUE (from .env, host:port/db form with inline auth)
+# at the user's shared external Redis instead. See .env / .env.example for the values.
 #
 # Topology: configurator (one-shot) + backend (gunicorn) + frontend (nginx) + websocket (socketio)
-# + queue-short/queue-long (rq workers) + scheduler, backed by mariadb + redis-cache + redis-queue.
-# Only frontend is port-published (${HTTP_PUBLISH_PORT}, see .env). Everything else stays on the
-# compose-internal network.
+# + queue-short/queue-long (rq workers) + scheduler, backed by containerized mariadb + external
+# Redis. Only frontend is port-published (${HTTP_PUBLISH_PORT}, see .env). Everything else stays
+# on the compose-internal network.
 name: erpnext-prod
 networks:
   default:
@@ -51,20 +58,14 @@ services:
       db:
         condition: service_healthy
         required: true
-      redis-cache:
-        condition: service_started
-        required: true
-      redis-queue:
-        condition: service_started
-        required: true
     entrypoint:
       - bash
       - -c
     environment:
       - DB_HOST=db
       - DB_PORT=3306
-      - REDIS_CACHE=redis-cache:6379
-      - REDIS_QUEUE=redis-queue:6379
+      - REDIS_CACHE=${REDIS_CACHE}
+      - REDIS_QUEUE=${REDIS_QUEUE}
       - SOCKETIO_PORT=9000
     image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
     networks:
@@ -170,21 +171,6 @@ services:
         target: /home/frappe/frappe-bench/sites
         type: volume
         volume: {}
-  redis-cache:
-    image: redis:8.6-alpine
-    networks:
-      default: null
-    restart: unless-stopped
-  redis-queue:
-    image: redis:8.6-alpine
-    networks:
-      default: null
-    restart: unless-stopped
-    volumes:
-      - source: redis-queue-data
-        target: /data
-        type: volume
-        volume: {}
   scheduler:
     command: bench schedule
     depends_on:
@@ -224,8 +210,6 @@ services:
 volumes:
   db-data:
     name: erpnext-prod_db-data
-  redis-queue-data:
-    name: erpnext-prod_redis-queue-data
   sites:
     name: erpnext-prod_sites
 x-backend-defaults:
