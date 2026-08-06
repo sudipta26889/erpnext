@@ -1462,7 +1462,7 @@ import frappe
 from frappe import _
 
 from erpnext.ai import scoping
-from erpnext.ai.registry import ToolError, clamp_limit, tool
+from erpnext.ai.registry import ToolError, assert_value_within_cap, clamp_limit, tool
 
 
 @tool(
@@ -1637,8 +1637,9 @@ class TestMCPPermissionBoundary(IntegrationTestCase):
 		)
 		self.assertTrue(out["result"]["isError"])
 		text = out["result"]["content"][0]["text"]
-		# Must not reveal whether hidden records exist.
-		self.assertNotIn("GL Entry", text.replace("GL Entry", "", 1) or "")
+		# The message must state refusal without revealing whether records exist.
+		self.assertIn("Not permitted", text)
+		self.assertNotIn("rows", text.lower())
 ```
 
 - [ ] **Step 7: Run the tests**
@@ -1771,10 +1772,15 @@ class TestWriteTools(IntegrationTestCase):
 		with self.assertRaises(registry.ToolError):
 			documents.update_document("Note", note.name, {"title": "changed"})
 
-	def test_delete_checks_permission(self):
+	def test_delete_removes_the_document(self):
 		note = frappe.get_doc({"doctype": "Note", "title": "to delete"}).insert()
 		out = documents.delete_document("Note", note.name)
 		self.assertTrue(out["deleted"])
+		self.assertFalse(frappe.db.exists("Note", note.name))
+
+	def test_delete_of_missing_document_raises_tool_error(self):
+		with self.assertRaises(registry.ToolError):
+			documents.delete_document("Note", "no-such-note")
 
 	def test_call_method_refuses_unlisted_paths(self):
 		with self.assertRaises(registry.ToolError):
@@ -1823,8 +1829,6 @@ def _recall_idempotency(key: str) -> dict | None:
 
 
 def _assert_value_cap(doc) -> None:
-	from erpnext.ai.registry import assert_value_within_cap
-
 	for fieldname in ("grand_total", "base_grand_total", "total"):
 		value = doc.get(fieldname)
 		if value:
@@ -2995,30 +2999,35 @@ Create `erpnext/ai/tests/test_settings_sync.py`:
 
 import pathlib
 import re
+import unittest
 
 from frappe.tests import UnitTestCase
 
-ROOT = pathlib.Path(__file__).resolve().parents[3]
+# In production the app is copied into the bench without the surrounding repo,
+# so prod-docker/ is absent there. Skip rather than fail: this guards the repo,
+# and it runs wherever the repo IS present (dev bench, CI, pre-commit).
+EXAMPLE = pathlib.Path(__file__).resolve().parents[3] / "prod-docker" / ".env.example"
+
+EXPECTED_KEYS = {
+	"PAPERCLIP_URL",
+	"PAPERCLIP_COMPANY_ID",
+	"PAPERCLIP_AGENT_ID",
+	"PAPERCLIP_BOARD_API_KEY",
+	"ERPNEXT_MCP_URL",
+}
 
 
-def _keys(path: pathlib.Path) -> set[str]:
-	return set(re.findall(r"^([A-Z_][A-Z0-9_]*)=", path.read_text(), re.M))
-
-
+@unittest.skipUnless(EXAMPLE.exists(), "prod-docker/.env.example not present in this checkout")
 class TestEnvParity(UnitTestCase):
 	def test_env_example_declares_every_paperclip_key(self):
-		example = _keys(ROOT / "prod-docker" / ".env.example")
-		expected = {
-			"PAPERCLIP_URL",
-			"PAPERCLIP_COMPANY_ID",
-			"PAPERCLIP_AGENT_ID",
-			"PAPERCLIP_BOARD_API_KEY",
-		}
-		self.assertTrue(expected <= example, f"missing from .env.example: {expected - example}")
+		declared = set(re.findall(r"^([A-Z_][A-Z0-9_]*)=", EXAMPLE.read_text(), re.M))
+		self.assertTrue(
+			EXPECTED_KEYS <= declared, f"missing from .env.example: {EXPECTED_KEYS - declared}"
+		)
 
 	def test_env_example_holds_no_secret_value(self):
-		text = (ROOT / "prod-docker" / ".env.example").read_text()
-		self.assertRegex(text, r"^PAPERCLIP_BOARD_API_KEY=\s*$", )
+		# re.M so ^...$ anchors to the line, not the whole file.
+		self.assertRegex(EXAMPLE.read_text(), r"(?m)^PAPERCLIP_BOARD_API_KEY=\s*$")
 ```
 
 - [ ] **Step 2: Run it and confirm it passes or fails honestly**
