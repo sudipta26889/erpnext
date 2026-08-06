@@ -44,6 +44,41 @@ def has_company_field(doctype: str) -> bool:
 	return bool(frappe.get_meta(doctype).get_field("company"))
 
 
+def _reject_company_filter(explicit) -> None:
+	# Refusing unrecognised/unsafe filter shapes is deliberate: `!=`, `not in`,
+	# `like`, etc. can select entities outside the bound scope, and there is no
+	# safe way to interpret them here.
+	allowed = ", ".join(bound_companies()) or _("none")
+	raise ToolError(
+		_(
+			"Invalid company filter {0}. The company filter must be a company name "
+			"or an '=' / 'in' filter over permitted companies: {1}."
+		).format(explicit, allowed)
+	)
+
+
+def _assert_company_filter_allowed(explicit) -> None:
+	if isinstance(explicit, str):
+		assert_company_allowed(explicit)
+		return
+
+	if isinstance(explicit, list | tuple) and len(explicit) == 2:
+		operator, value = explicit
+		if operator in ("=", "=="):
+			if not isinstance(value, str):
+				_reject_company_filter(explicit)
+			assert_company_allowed(value)
+			return
+		if operator == "in":
+			if not isinstance(value, list | tuple) or not value:
+				_reject_company_filter(explicit)
+			for company in value:
+				assert_company_allowed(company)
+			return
+
+	_reject_company_filter(explicit)
+
+
 def scope_filters(doctype: str, filters: dict | None) -> dict:
 	"""Return filters with the bound company applied, validating any explicit one."""
 	result = dict(filters or {})
@@ -52,8 +87,7 @@ def scope_filters(doctype: str, filters: dict | None) -> dict:
 
 	explicit = result.get("company")
 	if explicit:
-		if isinstance(explicit, str):
-			assert_company_allowed(explicit)
+		_assert_company_filter_allowed(explicit)
 		return result
 
 	result["company"] = default_company()

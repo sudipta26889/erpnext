@@ -48,3 +48,44 @@ class TestScoping(IntegrationTestCase):
 	def test_non_company_doctype_is_untouched(self):
 		out = scoping.scope_filters("Currency", {"enabled": 1})
 		self.assertNotIn("company", out)
+
+	def test_explicit_eq_operator_in_scope_is_preserved(self):
+		out = scoping.scope_filters("Sales Invoice", {"company": ["=", self.company]})
+		self.assertEqual(out["company"], ["=", self.company])
+
+	def test_explicit_eq_operator_out_of_scope_raises(self):
+		with self.assertRaises(registry.ToolError):
+			scoping.scope_filters("Sales Invoice", {"company": ["=", "Nope Ltd"]})
+
+	def test_explicit_in_operator_in_scope_is_preserved(self):
+		out = scoping.scope_filters("Sales Invoice", {"company": ["in", [self.company]]})
+		self.assertEqual(out["company"], ["in", [self.company]])
+
+	def test_explicit_in_operator_with_one_out_of_scope_entry_raises(self):
+		with self.assertRaises(registry.ToolError):
+			scoping.scope_filters(
+				"Sales Invoice", {"company": ["in", [self.company, "Some Other Entity Ltd"]]}
+			)
+
+	def test_explicit_not_equal_operator_raises_even_if_named_company_in_scope(self):
+		# The named company is in scope, but `!=` selects everything else, which
+		# is exactly what scoping must not allow.
+		with self.assertRaises(registry.ToolError):
+			scoping.scope_filters("Sales Invoice", {"company": ["!=", self.company]})
+
+	def test_explicit_like_operator_raises(self):
+		with self.assertRaises(registry.ToolError):
+			scoping.scope_filters("Sales Invoice", {"company": ["like", "%Test%"]})
+
+	def test_explicit_empty_in_operator_raises(self):
+		with self.assertRaises(registry.ToolError):
+			scoping.scope_filters("Sales Invoice", {"company": ["in", []]})
+
+	def test_explicit_dict_company_filter_raises(self):
+		with self.assertRaises(registry.ToolError):
+			scoping.scope_filters("Sales Invoice", {"company": {"$ne": self.company}})
+
+	def test_rejected_operator_filter_message_names_permitted_company(self):
+		with self.assertRaises(registry.ToolError) as ctx:
+			scoping.scope_filters("Sales Invoice", {"company": ["!=", self.company]})
+		self.assertIn(self.company, str(ctx.exception))
