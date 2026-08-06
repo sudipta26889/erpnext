@@ -17,14 +17,21 @@
 # re-apply the redis-externalization edit below) since redis-cache/redis-queue are no longer used
 # here.
 #
-# Redis cutover (this edit): the bundled redis-cache/redis-queue containers were removed. The
+# Redis cutover (earlier edit): the bundled redis-cache/redis-queue containers were removed. The
 # configurator now points REDIS_CACHE/REDIS_QUEUE (from .env, host:port/db form with inline auth)
 # at the user's shared external Redis instead. See .env / .env.example for the values.
 #
+# Postgres cutover (this edit): the bundled `db` (MariaDB) container was removed. The configurator
+# now points DB_HOST/DB_PORT/DB_TYPE (from .env) at the user's remote PostgreSQL instance instead.
+# The site itself (site_config.json) carries db_type/db_host/db_port/db_name/db_user/db_password
+# directly (frappe/installer.py writes these at `bench new-site` time and they take precedence over
+# common_site_config) - the configurator's globals are set too for consistency/defaults only.
+#
 # Topology: configurator (one-shot) + backend (gunicorn) + frontend (nginx) + websocket (socketio)
-# + queue-short/queue-long (rq workers) + scheduler, backed by containerized mariadb + external
-# Redis. Only frontend is port-published (${HTTP_PUBLISH_PORT}, see .env). Everything else stays
-# on the compose-internal network.
+# + queue-short/queue-long (rq workers) + scheduler, backed by external Postgres + external Redis.
+# Only frontend is port-published (${HTTP_PUBLISH_PORT}, see .env). Everything else stays on the
+# compose-internal network. If you ever regenerate this file from upstream, also drop
+# `overrides/compose.mariadb.yaml` from the -f list (or re-apply this edit) since `db` is gone.
 name: erpnext-prod
 networks:
   default:
@@ -53,17 +60,14 @@ services:
   configurator:
     command:
       - |
-        ls -1 apps > sites/apps.txt; bench set-config -g db_host $$DB_HOST; bench set-config -gp db_port $$DB_PORT; bench set-config -g redis_cache "redis://$$REDIS_CACHE"; bench set-config -g redis_queue "redis://$$REDIS_QUEUE"; bench set-config -g redis_socketio "redis://$$REDIS_QUEUE"; bench set-config -gp socketio_port $$SOCKETIO_PORT; bench set-config -g chromium_path /usr/bin/chromium-headless-shell;
-    depends_on:
-      db:
-        condition: service_healthy
-        required: true
+        ls -1 apps > sites/apps.txt; bench set-config -g db_type $$DB_TYPE; bench set-config -g db_host $$DB_HOST; bench set-config -gp db_port $$DB_PORT; bench set-config -g redis_cache "redis://$$REDIS_CACHE"; bench set-config -g redis_queue "redis://$$REDIS_QUEUE"; bench set-config -g redis_socketio "redis://$$REDIS_QUEUE"; bench set-config -gp socketio_port $$SOCKETIO_PORT; bench set-config -g chromium_path /usr/bin/chromium-headless-shell;
     entrypoint:
       - bash
       - -c
     environment:
-      - DB_HOST=db
-      - DB_PORT=3306
+      - DB_TYPE=${DB_TYPE}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
       - REDIS_CACHE=${REDIS_CACHE}
       - REDIS_QUEUE=${REDIS_QUEUE}
       - SOCKETIO_PORT=9000
@@ -76,33 +80,6 @@ services:
     volumes:
       - source: sites
         target: /home/frappe/frappe-bench/sites
-        type: volume
-        volume: {}
-  db:
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-      - --skip-character-set-client-handshake
-    environment:
-      MARIADB_AUTO_UPGRADE: 1
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-123}
-    healthcheck:
-      interval: 5s
-      retries: 5
-      start_period: 5s
-      test:
-        - CMD
-        - healthcheck.sh
-        - --connect
-        - --innodb_initialized
-      timeout: 5s
-    image: mariadb:11.8
-    networks:
-      default: null
-    restart: unless-stopped
-    volumes:
-      - source: db-data
-        target: /var/lib/mysql
         type: volume
         volume: {}
   frontend:
@@ -208,8 +185,6 @@ services:
         type: volume
         volume: {}
 volumes:
-  db-data:
-    name: erpnext-prod_db-data
   sites:
     name: erpnext-prod_sites
 x-backend-defaults:
