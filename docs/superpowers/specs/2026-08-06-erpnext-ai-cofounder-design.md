@@ -234,7 +234,11 @@ Because `[tool.bench.assets]` holds only one build config (already claimed by `b
 
 Screens: a **conversation thread** anchored to a standing Issue (title `ERPNext Operations`) assigned to the CEO. Posting a message is `POST /api/issues/{id}/comments`, which wakes the agent; the reply arrives as a comment, with run state polled from `active-run` / `live-runs`. A tool-call transcript showing what the agent did; **inline approval cards** for pending action requests calling `POST /api/tool-gateway/action-requests/{id}/approve|decline`, so approvals never require leaving ERPNext; and a settings-gated empty state when AI Settings is not configured.
 
-Because agents run in heartbeats rather than continuously, the UI must render agent state honestly — idle, waking, running, awaiting approval — rather than implying a always-on presence.
+**Live progress contract.** Runs have no SSE — the only `text/event-stream` routes in the server are board chat, plugins and mcp-http — so the tab polls `GET /api/heartbeat-runs/{runId}/events?afterSeq=N`, a cursor-based incremental feed, at roughly 1s while a run is active. Observed event types worth rendering: `adapter.invoke`, `status`, `chunk` (progressive output), `call_completed`, `call_denied`, `call_failed`, `approval_requested`, `approval_resolved`, `rate_limited`, `error`. `GET .../log` gives the raw transcript.
+
+The result is a thread where the user *watches the CEO work* — "reading Accounts Receivable… drafting Quotation… awaiting approval to submit" — rather than a spinner. Closer to an agent console than a chat box, which is the honest shape given each turn costs a full Claude Code run.
+
+The UI must therefore render agent state truthfully — idle, waking, running, awaiting approval, replied — and must never imply token-speed responses or an always-on presence.
 
 All Paperclip calls are proxied through thin whitelisted ERPNext methods (`erpnext/ai/paperclip.py`) rather than issued from the browser, so the board API key is never exposed to the client and every proxy method re-checks the caller's role.
 
