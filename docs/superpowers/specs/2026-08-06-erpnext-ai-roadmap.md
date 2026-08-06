@@ -22,7 +22,7 @@ The user explicitly asked for a comprehensive ERPNext knowledge base and chose t
 
 - `AI Knowledge Chunk` doctype: `source_url`, `title`, `doctype_ref`, `module`, `heading_path`, `content`, `token_count`, `content_hash`.
 - Embeddings in a **side table** `__ai_knowledge_vec(chunk_name PK, embedding vector(768))` with an HNSW index, created by a patch. Deliberately *not* a Frappe-managed column so `bench migrate` never touches it.
-- Retrieval: embed query → pgvector cosine top-50 → mxbai rerank → top-8. Exposed as a fourteenth MCP tool, `search_knowledge(query)`, alongside spec 1's thirteen.
+- Retrieval: embed query → pgvector cosine top-50 → mxbai rerank → top-8. Exposed as a fifteenth MCP tool, `search_knowledge(query)`, alongside spec 1's fourteen.
 - Re-index: weekly scheduler job diffing `content_hash`.
 
 **Three ingestion sources**

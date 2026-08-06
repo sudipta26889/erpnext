@@ -123,18 +123,43 @@ New module `AI` appended to `erpnext/modules.txt`.
 
 ### 3.2 AI Settings (new Single, module AI)
 
-Fields: `enabled` (Check), `paperclip_url` (Data), `board_api_key` (Password), `company_id` (Data), `agent_id` (Data, the CEO agent), `allowed_roles` (Table MultiSelect → Role), `enabled_tools` (Small Text, JSON list), `max_batch_size` (Int, default 20), `max_document_value` (Currency, default 0 = unlimited), `allowed_methods` (Code/JSON, allowlist for `call_method`).
+Fields: `enabled` (Check), `paperclip_url` (Data), `paperclip_company_id` (Data), `board_api_key` (Password), `agent_id` (Data, the CEO agent), `erpnext_company` (Link → Company, **required when enabled**), `additional_companies` (Table MultiSelect → Company, default empty), `allowed_roles` (Table MultiSelect → Role), `enabled_tools` (Small Text, JSON list), `max_batch_size` (Int, default 20), `max_document_value` (Currency, default 0 = unlimited), `allowed_methods` (Code/JSON, allowlist for `call_method`).
+
+**`paperclip_company_id` and `erpnext_company` are different things and must never be conflated.** The first is Paperclip's org/tenant that owns the agent; the second is the ERPNext accounting entity whose books the agent operates on. They are named apart deliberately — an earlier draft of this spec called both "company" and silently omitted the mapping between them. See §3.3.
 
 Deliberately **absent**: model and adapter settings. Those belong to the Paperclip agent (`adapterType`, `adapterConfig`, `budgetMonthlyCents`) and duplicating them in ERPNext would create two sources of truth that silently drift.
+
+### 3.3 Company scoping — how the agent knows *whose* books it is reading
+
+`company` is a mandatory filter on nearly every transactional doctype in ERPNext. An agent that does not know which company it operates in produces queries that are ambiguous at best, and in a multi-entity install **mixes the books of separate legal entities**. This is a correctness and compliance property, not a convenience.
+
+Rules:
+
+1. **One bound company by default.** `erpnext_company` is the agent's operating entity. The live install currently has exactly one — `GrihaTek It Solutions Pvt Ltd` (GISPL, INR, India, FY 2026-2027) — but the binding is explicit rather than inferred from `Global Defaults`, so adding a second company later cannot silently widen the agent's reach.
+2. **Company-scoped tools inject the filter server-side.** For any doctype carrying a `company` field, `search_documents`, `run_report` and `create_document` default to the bound company. A request naming a company outside `erpnext_company + additional_companies` is **refused**, not silently re-scoped — an agent asking for the wrong entity is a bug worth surfacing.
+3. **Cross-company work is opt-in.** `additional_companies` is empty by default. Populating it is a deliberate act.
+
+### 3.4 Orientation — how the agent knows what ERPNext *is*
+
+Three layers, in increasing persistence:
+
+**MCP `initialize` instructions (per connection, generated live).** MCP's `InitializeResult` carries an `instructions` string. Ours is built from the running install, never hardcoded: ERPNext version, bound company with its currency/country/fiscal year, active modules, the draft→submit lifecycle, which tools require approval, and the company-scoping rules above. Because it is generated, it cannot drift from reality.
+
+**A dedicated `get_company_context()` tool (on demand).** Returns the bound company plus currency, country, fiscal year, chart-of-accounts roots, active modules, and headline counts (customers, suppliers, items, open orders). This is the agent's first call when it needs to ground itself, and it is cheap enough to call at the start of any routine.
+
+**`instructionsBundle` and Skills (durable).** Paperclip agents accept `instructionsBundle: {entryFile, files}` and `desiredSkills`. Business doctrine lives here — how this company wants its books handled, which reports matter, what counts as overdue — versioned and test-runnable rather than buried in a prompt. Authored during Paperclip setup, not by ERPNext code.
+
+The division is deliberate: **ERPNext supplies facts, Paperclip supplies judgment.** Facts are generated so they cannot go stale; judgment is versioned so changes are reviewable.
 
 Secrets live here as Password fields read via `get_password()`, never in env files — matching the TaskPilot Settings precedent. A "Test Connection" button calls Paperclip `GET /api/health`.
 
 ## 4. Tool surface
 
-Thirteen tools. ERPNext's surface is uniform — every doctype is CRUD plus optional submit/cancel — so tools are generic and driven by live metadata rather than hand-written per doctype.
+Fourteen tools. ERPNext's surface is uniform — every doctype is CRUD plus optional submit/cancel — so tools are generic and driven by live metadata rather than hand-written per doctype.
 
 | Tool | Tier | Behaviour |
 |---|---|---|
+| `get_company_context()` | free | Bound company, currency, country, fiscal year, chart-of-accounts roots, active modules, headline counts. The grounding call (§3.4) |
 | `search_doctypes(query, module?)` | free | Fuzzy over label/module/description. Returns module, owning workspace, and desk URL |
 | `describe_doctype(doctype)` | free | Fields, types, options, links, mandatory, naming, workflow states, `is_submittable`, **and the caller's effective permissions** |
 | `list_reports(module?)` | free | Report discovery |
