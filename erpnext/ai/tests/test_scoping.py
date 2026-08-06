@@ -9,17 +9,40 @@ from erpnext.ai import registry, scoping
 
 class TestScoping(IntegrationTestCase):
 	def setUp(self):
-		registry.settings.cache_clear()
 		self.company = frappe.db.get_value("Company", {}, "name")
 		doc = frappe.get_single("AI Settings")
 		doc.erpnext_company = self.company
 		doc.additional_companies = []
 		doc.save()
-		registry.settings.cache_clear()
 
 	def tearDown(self):
-		registry.settings.cache_clear()
 		frappe.db.rollback()
+
+	def _make_second_company(self) -> str:
+		"""Return a second Company, creating a throwaway one if the site only has one.
+
+		ignore_chart_of_accounts skips Company.on_update()'s default-accounts
+		and default-warehouses creation (the latter needs a "Warehouse Type:
+		Transit" fixture this trimmed test site doesn't have) — irrelevant to
+		what this test checks, and the whole insert is rolled back in tearDown.
+		"""
+		existing = frappe.db.get_value("Company", {"name": ["!=", self.company]}, "name")
+		if existing:
+			return existing
+		frappe.local.flags.ignore_chart_of_accounts = True
+		try:
+			doc = frappe.get_doc(
+				{
+					"doctype": "Company",
+					"company_name": "AI Scoping Test Co",
+					"default_currency": "INR",
+					"country": "India",
+				}
+			)
+			doc.insert(ignore_permissions=True)
+			return doc.name
+		finally:
+			frappe.local.flags.ignore_chart_of_accounts = False
 
 	def test_bound_companies_defaults_to_one(self):
 		self.assertEqual(scoping.bound_companies(), [self.company])
@@ -89,3 +112,68 @@ class TestScoping(IntegrationTestCase):
 		with self.assertRaises(registry.ToolError) as ctx:
 			scoping.scope_filters("Sales Invoice", {"company": ["!=", self.company]})
 		self.assertIn(self.company, str(ctx.exception))
+
+	def test_explicit_uppercase_in_operator_is_accepted(self):
+		# Frappe normalises filter operators case-insensitively, so ["IN", [...]]
+		# is legal to Frappe; refusing it here was a false negative, not a hole
+		# (the lowercase form was already accepted).
+		out = scoping.scope_filters("Sales Invoice", {"company": ["IN", [self.company]]})
+		self.assertEqual(out["company"], ["IN", [self.company]])
+
+	def test_explicit_padded_in_operator_is_accepted(self):
+		out = scoping.scope_filters("Sales Invoice", {"company": [" in ", [self.company]]})
+		self.assertEqual(out["company"], [" in ", [self.company]])
+
+	# -- IMPORTANT 5: scope_filters must not assume `filters` is a dict -----
+
+	def test_scope_filters_rejects_three_element_list_form(self):
+		# Frappe's list filter form; dict(filters or {}) would otherwise raise
+		# a bare ValueError here, escaping this security function uncaught.
+		with self.assertRaises(registry.ToolError):
+			scoping.scope_filters("Sales Invoice", [["company", "=", "X"]])
+
+	def test_scope_filters_rejects_two_element_list_form(self):
+		# dict([["company", "Other Co"]]) silently coerces to
+		# {"company": "Other Co"} — this must be refused, not swallowed.
+		with self.assertRaises(registry.ToolError):
+			scoping.scope_filters("Sales Invoice", [["company", "Other Co"]])
+
+	def test_scope_filters_rejects_string_filters(self):
+		with self.assertRaises(registry.ToolError):
+			scoping.scope_filters("Sales Invoice", "company=X")
+
+	# -- IMPORTANT 6: company-less doctypes that can leak other companies ---
+
+	def test_assert_doctype_scopable_raises_for_version(self):
+		with self.assertRaises(registry.ToolError):
+			scoping.assert_doctype_scopable("Version")
+
+	def test_assert_doctype_scopable_raises_for_comment(self):
+		with self.assertRaises(registry.ToolError):
+			scoping.assert_doctype_scopable("Comment")
+
+	def test_assert_doctype_scopable_passes_for_sales_invoice(self):
+		scoping.assert_doctype_scopable("Sales Invoice")  # must not raise
+
+	def test_assert_doctype_scopable_passes_for_item(self):
+		scoping.assert_doctype_scopable("Item")  # must not raise
+
+	# -- IMPORTANT 7: the multi-company path, actually exercised ------------
+
+	def test_multi_company_scope_via_additional_companies(self):
+		# Every other test in this file leaves additional_companies empty, so
+		# bound_companies() never reads a real row.company off the Table
+		# MultiSelect anywhere else — a field-name typo there would go
+		# completely undetected without this.
+		company_b = self._make_second_company()
+		doc = frappe.get_single("AI Settings")
+		doc.append("additional_companies", {"company": company_b})
+		doc.save()
+
+		self.assertEqual(set(scoping.bound_companies()), {self.company, company_b})
+
+		out = scoping.scope_filters("Sales Invoice", {"company": ["in", [self.company, company_b]]})
+		self.assertEqual(out["company"], ["in", [self.company, company_b]])
+
+		with self.assertRaises(registry.ToolError):
+			scoping.assert_company_allowed("Some Unbound Third Entity Ltd")

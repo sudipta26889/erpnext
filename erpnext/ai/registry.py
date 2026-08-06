@@ -11,7 +11,6 @@ pointed at the MCP endpoint.
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Any
 
 import frappe
@@ -59,12 +58,16 @@ def tool(name: str, description: str, input_schema: dict, tier: str = "free") ->
 	return decorator
 
 
-# Invalidated by AISettings.on_update so long-lived workers pick up admin
-# changes (kill-switch, tightened caps) without a restart. See
-# erpnext/ai/doctype/ai_settings/ai_settings.py.
-@lru_cache(maxsize=1)
+# frappe.get_cached_doc is redis-backed and site-namespaced, unlike an
+# in-process lru_cache: a bench runs at least five independent Python
+# processes (gunicorn workers, queue-short, queue-long, scheduler), and an
+# lru_cache in one of them is invisible to the rest. Document.save() calls
+# clear_cache() on every save in every process — including via
+# frappe.db.set_single_value, which is how patches and scripts flip Singles —
+# so the kill-switch and tightened caps take effect everywhere without a
+# restart.
 def settings() -> Document:
-	return frappe.get_single("AI Settings")
+	return frappe.get_cached_doc("AI Settings")
 
 
 def _json_list(raw: str | None, field_label: str) -> list[str]:
@@ -123,7 +126,13 @@ def assert_value_within_cap(value: float | None, label: str) -> None:
 				label, cap
 			)
 		)
-	if float(value) > cap:
+	try:
+		numeric_value = float(value)
+	except (TypeError, ValueError):
+		# float() raises a bare ValueError on a non-numeric string; that must
+		# not escape this security check as an unclassified exception.
+		raise ToolError(_("{0} value {1!r} is not a number.").format(label, value)) from None
+	if numeric_value > cap:
 		# Refuse rather than trim: a silently shrunk document is worse than an error.
 		raise ToolError(
 			_("{0} value {1} exceeds the configured AI limit of {2}.").format(label, value, cap)

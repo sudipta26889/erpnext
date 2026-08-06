@@ -38,13 +38,6 @@ class AISettings(Document):
 		if not self.erpnext_company:
 			frappe.throw(_("ERPNext Company is required to enable AI."))
 
-	def on_update(self) -> None:
-		# Import locally: registry imports frappe-level tool modules and this
-		# avoids a module-load cycle with the doctype controller.
-		from erpnext.ai import registry
-
-		registry.settings.cache_clear()
-
 	def _validate_json_field(self, fieldname: str) -> None:
 		raw = (self.get(fieldname) or "").strip()
 		if not raw:

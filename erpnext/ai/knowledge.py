@@ -11,8 +11,12 @@ from erpnext.ai import registry
 def orientation_text() -> str:
 	"""System instructions handed to the agent on every MCP connection."""
 	company = registry.settings().erpnext_company
-	details = frappe.db.get_value(
-		"Company", company, ["default_currency", "country"], as_dict=True
+	# frappe.db.get_value("Company", None, ...) does not mean "no match": it
+	# returns an arbitrary company's row, which would leak another company's
+	# currency and country into the orientation text. Only look up a company
+	# when one is actually bound.
+	details = (
+		company and frappe.db.get_value("Company", company, ["default_currency", "country"], as_dict=True)
 	) or frappe._dict()
 
 	return _(

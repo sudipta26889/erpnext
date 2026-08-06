@@ -57,7 +57,6 @@ class TestMCP(IntegrationTestCase):
 		super().tearDownClass()
 
 	def setUp(self):
-		registry.settings.cache_clear()
 		doc = frappe.get_single("AI Settings")
 		doc.enabled = 1
 		doc.paperclip_url = "https://paperclip.example.com"
@@ -67,10 +66,8 @@ class TestMCP(IntegrationTestCase):
 		doc.erpnext_company = frappe.db.get_value("Company", {}, "name")
 		doc.enabled_tools = ""
 		doc.save()
-		registry.settings.cache_clear()
 
 	def tearDown(self):
-		registry.settings.cache_clear()
 		frappe.db.rollback()
 
 	def _handle(self, body: str):
@@ -135,13 +132,40 @@ class TestMCP(IntegrationTestCase):
 		doc = frappe.get_single("AI Settings")
 		doc.enabled = 0
 		doc.save()
-		registry.settings.cache_clear()
 		out = mcp.dispatch({"jsonrpc": "2.0", "id": 6, "method": "tools/list", "params": {}})
 		self.assertEqual(out["error"]["code"], -32001)
 
 	def test_notification_returns_no_response(self):
 		# JSON-RPC notifications have no id and must not be answered.
 		self.assertIsNone(mcp.dispatch({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+
+	def test_dispatch_guards_non_dict_payload_without_going_through_handle(self):
+		# dispatch() is a published interface in its own right, not reached
+		# only via handle() — the guard must live here too, or the next direct
+		# caller reopens the AttributeError-on-payload.get() crash.
+		for payload in (None, 42, "x", True, [{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}]):
+			with self.subTest(payload=payload):
+				out = mcp.dispatch(payload)
+				self.assertEqual(out["error"]["code"], mcp.INVALID_REQUEST)
+
+	def test_malformed_enabled_tools_never_escapes_any_protocol_branch_as_a_500(self):
+		# registry.get_tools() raises ToolError when enabled_tools is malformed
+		# JSON. frappe.db.set_single_value bypasses AISettings.validate()'s
+		# JSON check — the same path a patch or script would use to flip a
+		# Single directly — so this is how the field legitimately ends up
+		# malformed. Every protocol-level branch must still come back as a
+		# well-formed JSON-RPC object, never an unhandled exception.
+		frappe.db.set_single_value("AI Settings", "enabled_tools", "not valid json")
+
+		for method, params in (
+			("initialize", {}),
+			("tools/list", {}),
+			("tools/call", {"name": "ping", "arguments": {}}),
+		):
+			with self.subTest(method=method):
+				out = mcp.dispatch({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+				self.assertIsInstance(out, dict)
+				self.assertTrue("result" in out or "error" in out)
 
 	# -- dispatch()-level: exception-contract tests -----------------------
 
