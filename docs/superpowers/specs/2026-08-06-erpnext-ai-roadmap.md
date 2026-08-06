@@ -70,11 +70,11 @@ The moment a second, less-privileged person should use the AI tab, this must be 
 
 ## Deferred: escape hatch to architecture B
 
-**Largely obsoleted on 2026-08-06.** Architecture A's known weakness was latency — the assumption that chat had to go through `Issue → runs → comments`. Further research found `POST /api/board/chat/stream` ("conference room" board chat), which streams replies directly. The spec now uses that, and architecture B is **not** planned.
+**Status settled 2026-08-06 after reading the Paperclip server source.** Board chat was briefly adopted as the transport and then rejected: it is a *board concierge* that spawns a local `claude` CLI, not the CEO, and it requires `deploymentMode: local_trusted` (loopback-only) because it lends the server's shell to the requester. Unusable on a publicly-reachable authenticated instance, and undesirable even if forced.
 
-It remains relevant in exactly one scenario: if `enableConferenceRoomChat` cannot be enabled on the instance, chat falls back to the polled issue thread, and the latency objection returns.
+Chat therefore uses a standing Issue plus comments. The latency objection is **much weaker than feared**: commenting enqueues an agent wake (`wakeReason: "issue_commented"`), so a reply costs one agent run, not scheduler lag.
 
-In that case the fallback is **architecture B**: run a lightweight agent loop inside Frappe against LiteLLM for chat responsiveness, while still routing *every tool call* through Paperclip's tool gateway so policy, approval, audit and cost tracking remain identical for chat and for routines. The MCP server built in spec 1 is unchanged and fully reused — this is an additive change, not a rewrite.
+Architecture B stays parked, and becomes worth revisiting only if a full Claude Code run per message proves too slow for quick read-only questions in daily use. In that case: run a lightweight agent loop inside Frappe against LiteLLM for chat responsiveness, while still routing *every tool call* through Paperclip's tool gateway so policy, approval, audit and cost tracking remain identical for chat and for routines. The MCP server built in spec 1 is unchanged and fully reused — this is an additive change, not a rewrite.
 
 The property that must never be traded away for speed: **exactly one governed chokepoint through which the agent can touch the business.**
 

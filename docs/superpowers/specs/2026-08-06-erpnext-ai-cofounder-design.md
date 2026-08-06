@@ -26,7 +26,7 @@ Long-term intent (user's words): the agent becomes a "cofounder / director / co-
 | Autonomy | Proactive advisor. Agent proposes; human approves. No autonomous writes |
 | Architecture | **A — Paperclip is the brain.** ERPNext provides MCP tools + a thin chat client |
 | The agent | The **existing GrihaTEK CEO agent** (`d9654bd8-…`), already provisioned. Not built here |
-| Chat transport | `POST /api/board/chat/stream` (board / "conference room" chat), **not** the issue-comment thread. **Feature flag currently OFF** — see §2.1 |
+| Chat transport | A **standing Issue assigned to the CEO, driven by comments**. Adding a comment enqueues an agent wake (`wakeReason: "issue_commented"`) — event-driven, not heartbeat-polled. Board chat was investigated and **rejected**: see §2.1a |
 | Model | **Settled by the live agent, not by us**: `adapterType: claude_local`, `model: claude-opus-5`, cheap heartbeat profile `claude-haiku-4-5`. The earlier Kimi/Ollama decision is **moot** for this agent — changing it would mean changing the adapter |
 | Tool path | **Hard requirement:** ERPNext MCP is registered as a Paperclip tool connection behind the gateway — **never** in the agent's local Claude Code MCP config. See §6.1 |
 | Data egress | Business data goes to Anthropic via Claude Code. Accepted |
@@ -50,7 +50,7 @@ Everything below was confirmed against live systems or source on 2026-08-06, not
 - **Tool-count is a solved problem**: named gateways accept `onDemandToolsConfig: {enabled, searchToolName: "search_tools", runToolName: "run_tool"}`, so a wide tool surface does not have to be loaded into context up-front.
 - **Traceability**: `metadataPolicy` can forward `companyId`, `gatewayId`, `projectId`, `issueId`, `agentId`, `runId`, `correlationId` to the tool server. Every ERPNext mutation can be tied to the exact agent run that caused it.
 - **A CEO agent is a first-class concept.** `POST /api/companies/{companyId}/agents` takes `role` from `["ceo","cto","cmo","cfo","security","engineer","designer","pm","qa","devops","researcher","general"]`, plus `reportsTo` (org hierarchy), `capabilities`, `desiredSkills`, `adapterType`, `budgetMonthlyCents` and `permissions`. Per Paperclip's documentation the **first agent hired into a company is locked to `ceo`**. Approval kinds include `approve_ceo_strategy`, `hire_agent`, `budget_override_required`, `request_board_approval`.
-- **Streaming board chat exists but is currently DISABLED.** `POST /api/board/chat/stream`, body `{companyId, message, taskId}`. Probed live on 2026-08-06 with an agent key: returns `403 {"error":"Conference Room Chat is not enabled","code":"FEATURE_DISABLED"}`. The endpoint is real and the request shape is accepted; **`enableConferenceRoomChat` must be switched on** at `PATCH /api/instance/settings/experimental` (board access) before the desk chat can work. Until then the stream format (SSE vs chunked JSON — it declares `application/json`) also remains unverified, so the SPA transport must abstract both (§7.1).
+- **Chat with the CEO is `Issue + comments`, and it is event-driven.** Reading the server source (`@paperclipai/server/dist/routes/issues.js`) confirms that adding a comment enqueues an agent wake — `reason: "issue_commented"`, `source: "automation"` — carrying `commentId` and, when a run is already live, `interruptedRunId` / `resumeIntent`. So the agent responds on the message, **not** on the next scheduled heartbeat, and an in-flight run can be interrupted and resumed. Live state is available via `GET /api/issues/{id}/active-run` and `/live-runs`.
 - **Paperclip runs no LLM of its own.** Agents are external runtimes selected by `adapterType`: `["process","http","claude_local","codex_local","cursor_cloud","gemini_local","grok_local","hermes_gateway","hermes_local","opencode_local","pi_local","cursor","openclaw_gateway"]`. A Paperclip agent is effectively a coding-agent CLI running in an execution workspace — which is why MCP is the natural tool interface. **Consequence:** model choice is constrained by adapter (see the decisions table).
 - **Agents are not continuous.** They wake in *heartbeats*, work, and sleep, holding no context and consuming no budget in between — matching the `heartbeat-runs` endpoints.
 - Work threads also exist (`POST /api/issues/{id}/comments`, `GET /api/issues/{issueId}/active-run`, `/live-runs`, `/runs`) and remain the surface for routine output and long-running tasks, but they are **not** the chat path.
@@ -79,6 +79,20 @@ Everything below was confirmed against live systems or source on 2026-08-06, not
 - `nomic-embed-text` returns **768 dimensions**; reranker `mixedbread-ai/mxbai-rerank-large-v1` is live at `nuc.lan:7997`. (Used in spec 2.)
 - The site's PostgreSQL 18.4 has **pgvector 0.8.2 available** (not yet installed), and `erpnext_db_user` is a superuser, so `CREATE EXTENSION vector` will succeed. (Used in spec 2.)
 
+### 2.1a Board chat: investigated and rejected
+
+An earlier revision of this spec routed the desk tab through `POST /api/board/chat/stream`. Reading the implementation (`@paperclipai/server/dist/routes/board-chat.js`) shows that was wrong on two independent counts.
+
+**It is not the CEO.** Board chat is a *board concierge*. It spawns the operator's local `claude` CLI with the `paperclip-board` skill as its system prompt, anchored to a standing **"Board Operations"** issue, and exists to run the company's admin surface — onboarding, org overview, governance. It never involves the CEO agent, its GrihaTEK skills, or its business context. Even working perfectly it would not have been "chat with your CEO".
+
+**It cannot be enabled here, and should not be.** The route requires `deploymentMode === "local_trusted"`, which is loopback-only single-operator by construction. The gate's own comment states the reason: the relay *"spawns the operator's local `claude` CLI with permissions skipped (it must run headless), so it is only safe where the requester **is** the machine operator … Refuse everywhere else rather than lending the server's shell to remote users."*
+
+This instance runs `deploymentMode: authenticated`, published at a public hostname. `deploymentMode` is not in the settings PATCH schema — it is fixed at deploy time — and forcing it would hand a remote shell to anyone who can reach the host. **Not a workaround worth having.**
+
+`enableConferenceRoomChat` was switched on during investigation and left on; it is inert under this deployment mode and harmless.
+
+**What was salvaged:** board chat's own design validates the approach this spec now takes — a *standing issue* plus comments as the conversation substrate. The desk tab does the same thing, assigned to the CEO, minus the shell spawn.
+
 ### 2.3a The live GrihaTEK company (probed 2026-08-06 with an agent key)
 
 | Fact | Value |
@@ -106,7 +120,7 @@ ERPNext core ships no native AI. Five third-party apps exist (NextAI, ChatNext, 
 │  Workspace(type=Link → Page "ai")   │        │   adapterType → CLI runtime│
 │         │                            │        │   ├ Skills · Goals        │
 │  React SPA (chat)                   │        │   ├ Routines (heartbeats) │
-│   · POST /api/board/chat/stream ────┼───────▶│   ├ Tool policies         │
+│   · standing Issue + comments ──────┼───────▶│   ├ Tool policies         │
 │   · approve/decline inline          │        │   ├ Budget + Costs        │
 │   · run/approval state              │        │   └ Approvals / Audit     │
 └─────────────────────────────────────┘        └────────────┬──────────────┘
@@ -218,7 +232,7 @@ This deliberately **diverges from the `banking/` precedent**, which is a standal
 
 Because `[tool.bench.assets]` holds only one build config (already claimed by `banking`), the AI SPA gets its own `yarn build:ai` script rather than bench's default wiring — called out in the plan so it is not mistaken for a misconfiguration.
 
-Screens: a **streaming chat thread** driven by `POST /api/board/chat/stream` with `{companyId, message, taskId}`; a tool-call transcript showing what the agent did; **inline approval cards** for pending action requests calling `POST /api/tool-gateway/action-requests/{id}/approve|decline`, so approvals never require leaving ERPNext; and a settings-gated empty state when AI Settings is not configured.
+Screens: a **conversation thread** anchored to a standing Issue (title `ERPNext Operations`) assigned to the CEO. Posting a message is `POST /api/issues/{id}/comments`, which wakes the agent; the reply arrives as a comment, with run state polled from `active-run` / `live-runs`. A tool-call transcript showing what the agent did; **inline approval cards** for pending action requests calling `POST /api/tool-gateway/action-requests/{id}/approve|decline`, so approvals never require leaving ERPNext; and a settings-gated empty state when AI Settings is not configured.
 
 Because agents run in heartbeats rather than continuously, the UI must render agent state honestly — idle, waking, running, awaiting approval — rather than implying a always-on presence.
 
@@ -254,14 +268,15 @@ Additional controls: the MCP endpoint rejects requests when `enabled` is off; ra
 
 ## 7. Error handling
 
-### 7.1 Latency and the conference-room flag
+### 7.1 Latency
 
-`POST /api/board/chat/stream` streams the reply, so the original latency objection to architecture A no longer applies and **architecture B is not needed**. Two residual risks remain, both resolvable only with a board API key:
+Replies are **not** token-streamed. A message is a comment; the comment enqueues a wake; the CEO's Claude Code run produces a reply comment. Latency is therefore one agent run — seconds to a minute or two — not scheduler lag, because the wake is event-driven (§2.1).
 
-- **The flag may be off.** `enableConferenceRoomChat` is an experimental instance setting. If it cannot be enabled, the fallback is the `Issue → comments` work thread with polled `active-run` / `live-runs` state — noticeably slower, and the point at which architecture B would be worth reconsidering.
-- **The stream format is undeclared.** The endpoint advertises `application/json`, not `text/event-stream`. The SPA's transport layer must be written so SSE and chunked JSON are interchangeable behind one interface, rather than assuming either.
+The UI must be honest about this rather than imitating an instant chatbot: show queued / waking / running / awaiting-approval / replied, driven by `active-run` and `live-runs`. The correct mental model for the user is **messaging a colleague who responds promptly**, not a autocomplete-speed assistant. For a cofounder that framing is arguably more appropriate than a chat toy — but it must be designed for, not apologised for.
 
-Separately, heartbeat scheduling means a first message may wait for the agent to wake. That is a property of the platform, not a defect, and the UI surfaces it rather than hiding it.
+Note that chat does **not** require the CEO's heartbeat to be enabled; wake-on-comment is independent. Heartbeats matter only for the proactive routines in spec 3.
+
+If this proves too slow in practice, the escape hatch remains architecture B (roadmap) — a local chat loop for reads, with all tool calls still routed through Paperclip's gateway. It is deliberately not in scope here, because it splits the agent's identity in exchange for latency that may well be acceptable.
 
 ### 7.2 Failure matrix
 
@@ -269,7 +284,8 @@ Separately, heartbeat scheduling means a first message may wait for the agent to
 |---|---|
 | Paperclip unreachable | AI tab shows a degraded banner. Rest of the desk unaffected — it is a separate workspace |
 | AI Settings unconfigured | Nav item present, tab shows a configuration prompt. No errors raised |
-| `enableConferenceRoomChat` off | Tab explains the flag is required and falls back to the issue-thread path (§7.1) |
+| Standing issue missing / closed | Tab recreates it on first message, mirroring how board chat handles "Board Operations" |
+| Agent run already live | Comment carries `resumeIntent`; Paperclip interrupts and resumes rather than queueing a second run |
 | CEO agent asleep | Chat shows "waking" state; message is queued, not lost |
 | Model/adapter unavailable | Handled inside Paperclip by the agent's adapter config; ERPNext surfaces the error verbatim |
 | `frappe.PermissionError` in a tool | JSON-RPC error with a clear, non-leaky message the agent can reason about |
@@ -302,10 +318,18 @@ Resolved on 2026-08-06 by probing with the CEO agent key:
 
 Still required:
 
-1. **A board API key.** The supplied key is an *agent* key: it reads `agents/me`, skills, goals and routines, but every `tools/*` route returns `403 Board access required`. Creating the tool connection, the gateway, and the tool policies all need board scope. **This is the blocking credential.**
-2. **Enable `enableConferenceRoomChat`** via `PATCH /api/instance/settings/experimental`. Confirmed off — board chat returns `FEATURE_DISABLED`. Without it there is no desk chat, only the slower issue-thread fallback (§7.1).
-3. **The LAN address ERPNext will be reached at** — `http://192.168.10.118:4410` unless the Paperclip host resolves `nuc.lan`. The public hostname must not be used.
-4. The **role** that gates the AI workspace (default: System Manager).
-5. Optional but recommended: a **spend cap** on the CEO agent (`budgetMonthlyCents` is currently `0`).
+1. **The LAN address ERPNext will be reached at** — `http://192.168.10.118:4410` unless the Paperclip host resolves `nuc.lan`. The public hostname must not be used.
+2. The **role** that gates the AI workspace (default: System Manager).
+3. Optional but recommended: a **spend cap** on the CEO agent (`budgetMonthlyCents` is currently `0`).
 
-Items 1–3 block the live smoke test and the chat transport decision. The **MCP tool server — the bulk of the work — can be built and unit-tested without any of them.**
+Nothing here blocks the **MCP tool server**, which is the bulk of the work.
+
+### 10.1 Resolved during design (2026-08-06)
+
+- ✅ **Board API key** — `erpnext-mcp`, 90-day TTL, minted on the Mac via `paperclipai token board create` and stored in the gitignored `prod-docker/.env` as `PAPERCLIP_BOARD_API_KEY`; matching blank key in `.env.example`. Board scope verified: `tools/connections` returns `200` (`{"connections":[]}` — ERPNext not yet connected).
+- ✅ **Paperclip company / CEO agent ids** — recorded as `PAPERCLIP_COMPANY_ID` / `PAPERCLIP_AGENT_ID`.
+- ✅ **Chat transport** — standing Issue + comments, wake-on-comment (§2.1, §2.1a).
+- ✅ **Adapter and model** — `claude_local` / `claude-opus-5`.
+- ✅ **Network** — Paperclip and ERPNext share a LAN.
+- ⚠️ **CEO heartbeat is disabled** (`heartbeatEnabled: false`, `intervalSec: 0`, never run). Chat does not need it; **spec 3's proactive routines do.**
+- 🔒 The agent key used during investigation was **revoked** after use (verified `401`).
