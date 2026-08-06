@@ -88,18 +88,33 @@ def dispatch(payload: dict) -> dict | None:
 			return _result(request_id, _text_content(handler(**arguments)))
 		except ToolError as exc:
 			return _result(request_id, _text_content(str(exc), is_error=True))
-		except frappe.PermissionError:
+		except (frappe.PermissionError, frappe.DoesNotExistError):
 			# Deliberately uninformative about existence: saying "no such record"
-			# vs "not permitted" would leak whether hidden data exists.
+			# vs "not permitted" would leak whether hidden data exists. Both a
+			# hidden record and a genuinely missing one must produce the exact
+			# same message. DoesNotExistError is a ValidationError subclass, so
+			# this must be caught before the ValidationError branch below.
 			return _result(
 				request_id,
 				_text_content(_("Not permitted for the current ERPNext user."), is_error=True),
 			)
+		except frappe.ValidationError as exc:
+			# Business validation ("Customer is required") is deliberately echoed
+			# verbatim: it's exactly what lets the agent correct itself and retry.
+			return _result(request_id, _text_content(str(exc), is_error=True))
 		except TypeError as exc:
 			return _result(request_id, _text_content(_("Bad arguments: {0}").format(exc), is_error=True))
-		except Exception as exc:
+		except Exception:
+			# Never surface str(exc) here: it can echo table/constraint names, SQL
+			# fragments and file paths to an external agent. Only the logged
+			# traceback carries that detail; the caller gets a fixed message.
 			frappe.log_error(title="ERPNext AI tool failure", message=frappe.get_traceback())
-			return _result(request_id, _text_content(str(exc), is_error=True))
+			return _result(
+				request_id,
+				_text_content(
+					_("An internal error occurred in ERPNext; it has been logged."), is_error=True
+				),
+			)
 
 	return _error(request_id, METHOD_NOT_FOUND, _("Unknown method: {0}").format(method))
 
@@ -113,12 +128,17 @@ def handle() -> dict | None:
 	"""
 	raw = frappe.request.get_data(as_text=True) if frappe.request else ""
 	try:
-		payload = json.loads(raw or "{}")
+		payload = json.loads(raw)
 	except ValueError:
+		# Covers both syntactically invalid JSON and an empty body (empty
+		# string is not valid JSON either) — both are parse failures, not
+		# silent no-ops.
 		return _error(None, PARSE_ERROR, _("Invalid JSON"))
 
-	if isinstance(payload, list):
-		responses = [r for r in (dispatch(item) for item in payload) if r is not None]
-		return responses or None
+	if not isinstance(payload, dict):
+		# MCP 2025-06-18 removed JSON-RPC batching, so a spec-compliant client
+		# never sends anything but a single object — not null/number/string/
+		# bool, and not a batch array either.
+		return _error(None, INVALID_REQUEST, _("Request must be a JSON object"))
 
 	return dispatch(payload)
