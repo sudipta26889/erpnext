@@ -41,7 +41,20 @@ def _text_content(payload: Any, is_error: bool = False) -> dict:
 
 
 def _log_deferred(title: str) -> None:
-	"""Queue an Error Log write via redis instead of the live transaction.
+	"""Queue an Error Log write via redis instead of the live transaction, and
+	scrub `frappe.local.message_log` so a sanitized response can't leak the
+	real message.
+
+	`frappe.throw(msg, exc)` appends `msg` to `frappe.local.message_log`
+	*before* raising, and `frappe/utils/response.py::as_json()` unconditionally
+	copies a non-empty log into the response as `_server_messages` (v1) /
+	`messages` (v2) — regardless of what `result` says. Every caller of this
+	function is about to return a deliberately vague `result`, so the real
+	message must not also ride along in the same HTTP body. It is not simply
+	dropped: captured below before `frappe.clear_messages()` runs, so the
+	operator still has it in the Error Log even though the calling agent no
+	longer does. The clear happens unconditionally, before the log write is
+	even attempted, so it can't be skipped by a logging failure below.
 
 	A plain `frappe.log_error()` does a synchronous `insert()`. If the
 	exception being logged came from a database error, the transaction is
@@ -52,8 +65,13 @@ def _log_deferred(title: str) -> None:
 	aborted transaction. The outer try/except is belt-and-braces: failing to
 	log must never be able to change what the caller sees.
 	"""
+	extra = ""
+	if frappe.local.message_log:
+		logged = "\n".join(frappe.as_json(entry, indent=None) for entry in frappe.get_message_log())
+		extra = f"\n\nmessage_log (cleared before response):\n{logged}"
+		frappe.clear_messages()
 	try:
-		frappe.log_error(title=title, message=frappe.get_traceback(), defer_insert=True)
+		frappe.log_error(title=title, message=frappe.get_traceback() + extra, defer_insert=True)
 	except Exception:
 		pass
 
@@ -141,6 +159,12 @@ def _route(request_id: Any, method: str, params: dict) -> dict:
 			# hidden record and a genuinely missing one must produce the exact
 			# same message. DoesNotExistError is a ValidationError subclass, so
 			# this must be caught before the ValidationError branch below.
+			# Document.load_from_db and Frappe's permission checks both raise via
+			# frappe.throw(), which populates message_log with the very detail
+			# ("Sales Invoice ABC-001 not found") this branch exists to hide —
+			# _log_deferred() clears it so it doesn't ride along in the same
+			# response as _server_messages / messages.
+			_log_deferred("ERPNext AI tool permission or missing record")
 			return _result(
 				request_id,
 				_text_content(_("Not permitted for the current ERPNext user."), is_error=True),
@@ -148,6 +172,9 @@ def _route(request_id: Any, method: str, params: dict) -> dict:
 		except frappe.ValidationError as exc:
 			# Business validation ("Customer is required") is deliberately echoed
 			# verbatim: it's exactly what lets the agent correct itself and retry.
+			# frappe.local.message_log is deliberately left untouched here too —
+			# it holds the same text already going out in `result`, not anything
+			# the agent doesn't already have.
 			return _result(request_id, _text_content(str(exc), is_error=True))
 		except TypeError:
 			# Catches a TypeError raised *inside* a handler too, not only a

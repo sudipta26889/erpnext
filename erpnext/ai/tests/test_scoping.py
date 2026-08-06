@@ -29,6 +29,7 @@ class TestScoping(IntegrationTestCase):
 		existing = frappe.db.get_value("Company", {"name": ["!=", self.company]}, "name")
 		if existing:
 			return existing
+		previous_flag = frappe.local.flags.ignore_chart_of_accounts
 		frappe.local.flags.ignore_chart_of_accounts = True
 		try:
 			doc = frappe.get_doc(
@@ -42,7 +43,7 @@ class TestScoping(IntegrationTestCase):
 			doc.insert(ignore_permissions=True)
 			return doc.name
 		finally:
-			frappe.local.flags.ignore_chart_of_accounts = False
+			frappe.local.flags.ignore_chart_of_accounts = previous_flag
 
 	def test_bound_companies_defaults_to_one(self):
 		self.assertEqual(scoping.bound_companies(), [self.company])
@@ -151,6 +152,16 @@ class TestScoping(IntegrationTestCase):
 	def test_assert_doctype_scopable_raises_for_comment(self):
 		with self.assertRaises(registry.ToolError):
 			scoping.assert_doctype_scopable("Comment")
+
+	def test_assert_doctype_scopable_raises_for_deleted_document(self):
+		# Stores the full JSON of any deleted document, any company included.
+		with self.assertRaises(registry.ToolError):
+			scoping.assert_doctype_scopable("Deleted Document")
+
+	def test_assert_doctype_scopable_raises_for_prepared_report(self):
+		# Stores rendered report output, which can embed any company's data.
+		with self.assertRaises(registry.ToolError):
+			scoping.assert_doctype_scopable("Prepared Report")
 
 	def test_assert_doctype_scopable_passes_for_sales_invoice(self):
 		scoping.assert_doctype_scopable("Sales Invoice")  # must not raise

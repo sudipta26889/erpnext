@@ -17,6 +17,9 @@ _THROWAWAY_TOOL_NAMES = [
 	"_test_raises_does_not_exist",
 	"_test_raises_validation",
 	"_test_raises_unexpected",
+	"_test_throws_does_not_exist",
+	"_test_throws_permission_error",
+	"_test_throws_unexpected",
 ]
 
 
@@ -47,6 +50,41 @@ def _raise_validation():
 )
 def _raise_unexpected():
 	raise RuntimeError("leaked detail: tabSales Invoice constraint violated")
+
+
+# The three tools below go through frappe.throw() instead of raising directly
+# — the real path Document.load_from_db() and Frappe's permission checks use.
+# frappe.throw(msg, exc) appends `msg` to frappe.local.message_log *before*
+# raising, and frappe/utils/response.py::as_json() unconditionally copies a
+# non-empty log into the response as `_server_messages` (v1) / `messages`
+# (v2), regardless of what `result` says. The _raises_* tools above never
+# exercised that: raising the exception directly leaves message_log empty, so
+# they cannot catch a regression in the message_log-clearing fix.
+@registry.tool(
+	name="_test_throws_does_not_exist",
+	description="Test-only tool that raises DoesNotExistError via frappe.throw.",
+	input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+)
+def _throw_does_not_exist():
+	frappe.throw(frappe._("Sales Invoice SINV-999 not found"), frappe.DoesNotExistError)
+
+
+@registry.tool(
+	name="_test_throws_permission_error",
+	description="Test-only tool that raises PermissionError via frappe.throw.",
+	input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+)
+def _throw_permission_error():
+	frappe.throw(frappe._("Not permitted to read Sales Invoice SINV-999"), frappe.PermissionError)
+
+
+@registry.tool(
+	name="_test_throws_unexpected",
+	description="Test-only tool that raises an unclassified error via frappe.throw.",
+	input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+)
+def _throw_unexpected():
+	frappe.throw(frappe._("leaked detail: tabSales Invoice constraint violated"), RuntimeError)
 
 
 class TestMCP(IntegrationTestCase):
@@ -154,18 +192,30 @@ class TestMCP(IntegrationTestCase):
 		# JSON check — the same path a patch or script would use to flip a
 		# Single directly — so this is how the field legitimately ends up
 		# malformed. Every protocol-level branch must still come back as a
-		# well-formed JSON-RPC object, never an unhandled exception.
+		# well-formed JSON-RPC object, never an unhandled exception — and,
+		# where the branch actually reads enabled_tools, the malformed value
+		# must be provably the cause, not just "some dict came back".
 		frappe.db.set_single_value("AI Settings", "enabled_tools", "not valid json")
 
-		for method, params in (
-			("initialize", {}),
-			("tools/list", {}),
-			("tools/call", {"name": "ping", "arguments": {}}),
-		):
-			with self.subTest(method=method):
-				out = mcp.dispatch({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
-				self.assertIsInstance(out, dict)
-				self.assertTrue("result" in out or "error" in out)
+		# initialize never calls get_tools(), so it's unaffected — kept here
+		# only to prove it still returns cleanly with the field malformed.
+		out = mcp.dispatch({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+		self.assertIn("result", out)
+
+		# tools/list calls get_tools() outside any local try/except, so the
+		# ToolError escapes to dispatch()'s top-level handler as a JSON-RPC
+		# error object carrying ToolError's own code.
+		out = mcp.dispatch({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+		self.assertEqual(out["error"]["code"], registry.TOOL_ERROR_CODE)
+
+		# tools/call resolves the tool (and so enabled_tools) inside its own
+		# try/except, which turns the same ToolError into a result+isError
+		# instead of a transport-level error.
+		out = mcp.dispatch(
+			{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+			 "params": {"name": "ping", "arguments": {}}}
+		)
+		self.assertTrue(out["result"]["isError"])
 
 	# -- dispatch()-level: exception-contract tests -----------------------
 
@@ -203,6 +253,50 @@ class TestMCP(IntegrationTestCase):
 		self.assertEqual(
 			text, frappe._("An internal error occurred in ERPNext; it has been logged.")
 		)
+
+	# -- message_log: frappe.throw()'s real path, not a direct raise --------
+	#
+	# frappe.throw() appends its message to frappe.local.message_log before
+	# raising, and as_json() copies a non-empty log into the response as
+	# _server_messages / messages regardless of what `result` says. Each test
+	# below asserts both halves of the fix: the sanitized message in `result`,
+	# and that message_log carries nothing extra alongside it.
+
+	def test_does_not_exist_error_via_throw_returns_vague_message_and_clears_log(self):
+		out = mcp.dispatch(
+			{"jsonrpc": "2.0", "id": 10, "method": "tools/call",
+			 "params": {"name": "_test_throws_does_not_exist", "arguments": {}}}
+		)
+		text = out["result"]["content"][0]["text"]
+		self.assertTrue(out["result"]["isError"])
+		self.assertNotIn("SINV-999", text)
+		self.assertEqual(text, frappe._("Not permitted for the current ERPNext user."))
+		self.assertEqual(frappe.local.message_log, [])
+
+	def test_permission_error_via_throw_returns_vague_message_and_clears_log(self):
+		out = mcp.dispatch(
+			{"jsonrpc": "2.0", "id": 11, "method": "tools/call",
+			 "params": {"name": "_test_throws_permission_error", "arguments": {}}}
+		)
+		text = out["result"]["content"][0]["text"]
+		self.assertTrue(out["result"]["isError"])
+		self.assertNotIn("SINV-999", text)
+		self.assertEqual(text, frappe._("Not permitted for the current ERPNext user."))
+		self.assertEqual(frappe.local.message_log, [])
+
+	def test_unexpected_error_via_throw_returns_generic_message_and_clears_log(self):
+		out = mcp.dispatch(
+			{"jsonrpc": "2.0", "id": 12, "method": "tools/call",
+			 "params": {"name": "_test_throws_unexpected", "arguments": {}}}
+		)
+		text = out["result"]["content"][0]["text"]
+		self.assertTrue(out["result"]["isError"])
+		self.assertNotIn("tabSales Invoice", text)
+		self.assertNotIn("leaked", text)
+		self.assertEqual(
+			text, frappe._("An internal error occurred in ERPNext; it has been logged.")
+		)
+		self.assertEqual(frappe.local.message_log, [])
 
 	# -- handle()-level: the real HTTP-facing entrypoint -------------------
 

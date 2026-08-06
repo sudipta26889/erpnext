@@ -65,7 +65,9 @@ def tool(name: str, description: str, input_schema: dict, tier: str = "free") ->
 # clear_cache() on every save in every process — including via
 # frappe.db.set_single_value, which is how patches and scripts flip Singles —
 # so the kill-switch and tightened caps take effect everywhere without a
-# restart.
+# restart. The returned Document is shared across every caller in this
+# worker process, so treat it as read-only — mutating it (e.g. `.enabled = 0`)
+# would poison every later read until the next cache clear.
 def settings() -> Document:
 	return frappe.get_cached_doc("AI Settings")
 
@@ -114,7 +116,7 @@ def clamp_limit(requested: int | None) -> int:
 	return min(int(requested), cap)
 
 
-def assert_value_within_cap(value: float | None, label: str) -> None:
+def assert_value_within_cap(value: float | str | None, label: str) -> None:
 	cap = float(settings().max_document_value or 0)
 	if not cap:
 		return  # 0 means unlimited: nothing to enforce, None passes harmlessly.

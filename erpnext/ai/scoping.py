@@ -25,9 +25,14 @@ from erpnext.ai.registry import ToolError
 # Doctypes that carry no `company` field but whose documents can expose the
 # contents of records belonging to any company — e.g. Version stores
 # field-level before/after diffs of arbitrary documents, and Comment/
-# Communication/File can be attached to a document in any company. Not wired
-# into scope_filters() or anything else yet; a later task's read tools call
-# assert_doctype_scopable() before touching one of these.
+# Communication/File can be attached to a document in any company. Deleted
+# Document stores the full JSON of any deleted document (any company, any
+# doctype) and Prepared Report stores rendered report output, so both belong
+# here for the same reason. Integration Request, Notification Log and ToDo
+# likewise carry payloads/content tied to documents in any company without a
+# `company` field of their own. Not wired into scope_filters() or anything
+# else yet; a later task's read tools call assert_doctype_scopable() before
+# touching one of these.
 COMPANY_LESS_SENSITIVE_DOCTYPES: frozenset[str] = frozenset(
 	{
 		"Version",
@@ -38,6 +43,11 @@ COMPANY_LESS_SENSITIVE_DOCTYPES: frozenset[str] = frozenset(
 		"Email Queue",
 		"Error Log",
 		"Access Log",
+		"Deleted Document",
+		"Prepared Report",
+		"Integration Request",
+		"Notification Log",
+		"ToDo",
 	}
 )
 
