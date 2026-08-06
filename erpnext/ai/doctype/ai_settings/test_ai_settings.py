@@ -27,7 +27,6 @@ class TestAISettings(IntegrationTestCase):
 		self.assertRaises(frappe.ValidationError, doc.save)
 
 	def test_enabling_requires_a_bound_company(self):
-		company = frappe.db.get_value("Company", {}, "name")
 		doc = frappe.get_single("AI Settings")
 		doc.enabled = 1
 		doc.paperclip_url = "https://paperclip.example.com/"
@@ -37,12 +36,14 @@ class TestAISettings(IntegrationTestCase):
 		doc.erpnext_company = ""
 		self.assertRaises(frappe.ValidationError, doc.save)
 
-		# Document.save() stamps self.modified with now() during set_user_and_timestamp() before
-		# validate() runs, and never undoes that when validate() throws. Singles are never is_new(),
-		# so the next save()'s check_if_latest() compares that stale in-memory stamp against the
-		# still-unpersisted (None) DB value and raises TimestampMismatchError. Nothing was actually
-		# written above, so resetting modified back to None is correct, not a hack around real state.
-		doc.modified = None
+	def test_enabling_succeeds_with_a_bound_company(self):
+		company = frappe.db.get_value("Company", {}, "name")
+		doc = frappe.get_single("AI Settings")
+		doc.enabled = 1
+		doc.paperclip_url = "https://paperclip.example.com/"
+		doc.paperclip_company_id = "c-1"
+		doc.agent_id = "a-1"
+		doc.board_api_key = "secret"
 		doc.erpnext_company = company
 		doc.save()
 		# trailing slash is normalised away so URL joins never double up
