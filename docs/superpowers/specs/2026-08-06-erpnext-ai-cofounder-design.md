@@ -25,10 +25,11 @@ Long-term intent (user's words): the agent becomes a "cofounder / director / co-
 |---|---|
 | Autonomy | Proactive advisor. Agent proposes; human approves. No autonomous writes |
 | Architecture | **A — Paperclip is the brain.** ERPNext provides MCP tools + a thin chat client |
-| The agent | A Paperclip **CEO agent** (first hire in the company). Not built here |
-| Chat transport | `POST /api/board/chat/stream` (board / "conference room" chat), **not** the issue-comment thread |
-| Model | Determined by the agent's **`adapterType`**, not a free-form setting. To run on the local LiteLLM/Ollama gateway (`kimi-k3:cloud`, fallback `kimi-k2.6:cloud`) the adapter must be `opencode_local`, or an `http`/`process` adapter pointed at the gateway |
-| Data egress | Cloud model routing accepted for business data |
+| The agent | The **existing GrihaTEK CEO agent** (`d9654bd8-…`), already provisioned. Not built here |
+| Chat transport | `POST /api/board/chat/stream` (board / "conference room" chat), **not** the issue-comment thread. **Feature flag currently OFF** — see §2.1 |
+| Model | **Settled by the live agent, not by us**: `adapterType: claude_local`, `model: claude-opus-5`, cheap heartbeat profile `claude-haiku-4-5`. The earlier Kimi/Ollama decision is **moot** for this agent — changing it would mean changing the adapter |
+| Tool path | **Hard requirement:** ERPNext MCP is registered as a Paperclip tool connection behind the gateway — **never** in the agent's local Claude Code MCP config. See §6.1 |
+| Data egress | Business data goes to Anthropic via Claude Code. Accepted |
 | HITL trigger | **Tiered by blast radius.** Reads and draft creation are free; submit / cancel / delete / updates to submitted docs / bulk / over-threshold require approval |
 | Permission model (v1) | **Role-gate the AI workspace.** Single service identity mirroring the permissions of the gated role. Multi-user identity passthrough deferred |
 | Knowledge (v1) | Live metadata introspection + workspace/URL location map |
@@ -49,7 +50,7 @@ Everything below was confirmed against live systems or source on 2026-08-06, not
 - **Tool-count is a solved problem**: named gateways accept `onDemandToolsConfig: {enabled, searchToolName: "search_tools", runToolName: "run_tool"}`, so a wide tool surface does not have to be loaded into context up-front.
 - **Traceability**: `metadataPolicy` can forward `companyId`, `gatewayId`, `projectId`, `issueId`, `agentId`, `runId`, `correlationId` to the tool server. Every ERPNext mutation can be tied to the exact agent run that caused it.
 - **A CEO agent is a first-class concept.** `POST /api/companies/{companyId}/agents` takes `role` from `["ceo","cto","cmo","cfo","security","engineer","designer","pm","qa","devops","researcher","general"]`, plus `reportsTo` (org hierarchy), `capabilities`, `desiredSkills`, `adapterType`, `budgetMonthlyCents` and `permissions`. Per Paperclip's documentation the **first agent hired into a company is locked to `ceo`**. Approval kinds include `approve_ceo_strategy`, `hire_agent`, `budget_override_required`, `request_board_approval`.
-- **Streaming board chat exists.** `POST /api/board/chat/stream` — *"Stream a board-level chat response (requires `enableConferenceRoomChat`)"*, body `{companyId, message, taskId}`. This is the chat surface for the desk tab. Two things remain **unverified pending a board API key**: whether `enableConferenceRoomChat` is enabled on this instance (`GET /api/instance/settings/experimental` returns `403` unauthenticated), and whether the response is SSE or chunked JSON — the spec declares `application/json` despite the name.
+- **Streaming board chat exists but is currently DISABLED.** `POST /api/board/chat/stream`, body `{companyId, message, taskId}`. Probed live on 2026-08-06 with an agent key: returns `403 {"error":"Conference Room Chat is not enabled","code":"FEATURE_DISABLED"}`. The endpoint is real and the request shape is accepted; **`enableConferenceRoomChat` must be switched on** at `PATCH /api/instance/settings/experimental` (board access) before the desk chat can work. Until then the stream format (SSE vs chunked JSON — it declares `application/json`) also remains unverified, so the SPA transport must abstract both (§7.1).
 - **Paperclip runs no LLM of its own.** Agents are external runtimes selected by `adapterType`: `["process","http","claude_local","codex_local","cursor_cloud","gemini_local","grok_local","hermes_gateway","hermes_local","opencode_local","pi_local","cursor","openclaw_gateway"]`. A Paperclip agent is effectively a coding-agent CLI running in an execution workspace — which is why MCP is the natural tool interface. **Consequence:** model choice is constrained by adapter (see the decisions table).
 - **Agents are not continuous.** They wake in *heartbeats*, work, and sleep, holding no context and consuming no budget in between — matching the `heartbeat-runs` endpoints.
 - Work threads also exist (`POST /api/issues/{id}/comments`, `GET /api/issues/{issueId}/active-run`, `/live-runs`, `/runs`) and remain the surface for routine output and long-running tasks, but they are **not** the chat path.
@@ -70,11 +71,28 @@ Everything below was confirmed against live systems or source on 2026-08-06, not
 ### 2.3 Model and vector infrastructure
 
 - LiteLLM gateway fronts Ollama at `nuc.lan:11434`.
-- `kimi-k2.6:cloud` **verified working with tool calling** — a live probe returned a well-formed `tool_calls` block with reasoning. This is the fallback, and it is known-good.
-- `kimi-k3:cloud` exists on the registry but the account currently returns *"this model uses extra usage only … your extra usage balance is empty"*. K3 has no local weights (no llama.cpp/GGUF path), so "K3 via Ollama" means **Ollama Cloud**. Requires topping up before use.
+**Superseded for the CEO agent** — it runs `claude_local` / `claude-opus-5` (§2.3a), so nothing below is on the critical path. Retained because it stays relevant to spec 2's embedding/rerank work and to any future agent that does route through the local gateway:
+
+- `kimi-k2.6:cloud` **verified working with tool calling** — a live probe returned a well-formed `tool_calls` block with reasoning.
+- `kimi-k3:cloud` exists on the registry but the account returns *"this model uses extra usage only … your extra usage balance is empty"*. K3 has no local weights (no llama.cpp/GGUF path), so "K3 via Ollama" means **Ollama Cloud**.
 - Genuinely local alternatives if egress ever becomes unacceptable: `gpt-oss:20b`, `qwen3:14b`, `mistral-small:24b`.
 - `nomic-embed-text` returns **768 dimensions**; reranker `mixedbread-ai/mxbai-rerank-large-v1` is live at `nuc.lan:7997`. (Used in spec 2.)
 - The site's PostgreSQL 18.4 has **pgvector 0.8.2 available** (not yet installed), and `erpnext_db_user` is a superuser, so `CREATE EXTENSION vector` will succeed. (Used in spec 2.)
+
+### 2.3a The live GrihaTEK company (probed 2026-08-06 with an agent key)
+
+| Fact | Value |
+|---|---|
+| Paperclip company id | `06bb12c4-648e-4e05-a5ef-e32a8ee3ec06` (slug `GRI`) |
+| CEO agent id | `d9654bd8-6382-4c3b-9b9b-050d533a59a8`, `urlKey: ceo`, status `idle`, created 2026-08-06 |
+| CEO runtime | `adapterType: claude_local`, `model: claude-opus-5`; cheap heartbeat profile `claude-haiku-4-5` |
+| Other agents | **CTO** (`claude_local`, opus-5), Reflection Coach (paused), Summarizer (paused) |
+| Budget | `budgetMonthlyCents: 0`, `spentMonthlyCents: 0` — **no cap set** |
+| Existing skills | `grihatek-company-facts`, `grihatek-brand`, `grihatek-quote-builder`, `grihatek-grant-watch`, `grihatek-pcb-review`, plus paperclip-* and memory skills |
+| Business | GRIHATEK IT SOLUTIONS PRIVATE LIMITED, CIN U62091WR2026PTC295515, inc. 24 July 2026, West Bengal. Smart-home IoT: sensing hardware, ML layer, integration services. Flagship **RoomGuardian V2** |
+| Host topology | Paperclip runs on a Mac (`/Users/dharabot/.paperclip/…`) on the same LAN as ERPNext. `nuc.lan` = `192.168.10.118`; ERPNext frontend `:4410` responds `200`. `mcp_remote` must use the **LAN** address, not the public hostname |
+
+**Highest-value integration point already present:** the `grihatek-quote-builder` skill *"builds costed customer quotes for GrihaTEK home and building automation integration projects."* Today that produces files. With the ERPNext tool connection it can produce real `Quotation` documents against real `Item`, `Price List` and `Customer` records — with submission gated by approval.
 
 ### 2.4 Landscape
 
@@ -208,6 +226,24 @@ All Paperclip calls are proxied through thin whitelisted ERPNext methods (`erpne
 
 ## 6. Security model
 
+### 6.1 The gateway is load-bearing — ERPNext MCP must NEVER be wired directly into the agent
+
+The live CEO agent runs with **`dangerouslySkipPermissions: true`** in its `adapterConfig`. Claude Code therefore auto-approves its own tool calls with no prompt. The consequence is absolute:
+
+> If the ERPNext MCP server were added to the agent's local Claude Code MCP config, **every HITL control in this design would be silently bypassed.** The agent would submit invoices, cancel documents and delete records with no human in the loop and no audit trail, and nothing would appear to be wrong.
+
+Human approval exists **only** because tool calls traverse Paperclip's tool gateway, which suspends governed calls into action requests. So:
+
+- ERPNext is registered as a Paperclip **tool connection** (`transport: mcp_remote`) and bound to the agent through a **tool access profile**.
+- The agent reaches ERPNext **exclusively** through the gateway's MCP endpoint.
+- Adding `erpnext` to any agent's local MCP config is a **defect**, not a shortcut. This belongs in the implementation plan as an explicit check.
+
+The ERPNext-side caps in §4.1 exist precisely because this invariant can be broken by configuration elsewhere, outside this repo's control.
+
+Two related observations from the live probe, worth acting on but outside this spec: the CEO has `budgetMonthlyCents: 0` (no spend cap), and `dangerouslySkipPermissions` is broad — it governs the agent's local filesystem and shell access too, not just ERPNext.
+
+### 6.2 Single service identity
+
 **The cost of architecture A, stated plainly.** Paperclip authenticates to ERPNext with a single API key, so the agent is one ERPNext identity regardless of who is chatting. Permission checks run against that service account, not the asker. A low-privilege user chatting with a privileged agent could otherwise read data they cannot see in the desk.
 
 v1 mitigation, chosen deliberately: **role-gate the AI workspace.** The workspace and every Paperclip proxy method are restricted to roles listed in AI Settings (initially the user alone). The service account is provisioned with exactly the permissions those roles already hold. This matches the "cofounder" framing — it is not a feature for every desk user.
@@ -257,12 +293,19 @@ Deferred with intent, tracked in `2026-08-06-erpnext-ai-roadmap.md`: the pgvecto
 
 ## 10. Required inputs before implementation can be verified end to end
 
-1. Paperclip **board API key** and the target **company id**.
-2. A **CEO agent** hired in that company (or approval to create one), and its `agent_id`.
-3. Confirmation that **`enableConferenceRoomChat`** (and `enableBuiltInAgents`, if built-in routines are wanted) is enabled at `GET /api/instance/settings/experimental` — currently unverifiable, returns `403` unauthenticated.
-4. The CEO agent's **`adapterType`**. To run on the local LiteLLM/Ollama gateway this needs `opencode_local` or an `http`/`process` adapter; `claude_local` / `gemini_local` bind the agent to those vendors instead.
-5. **Ollama credit** for `kimi-k3:cloud`, or explicit acceptance of `kimi-k2.6:cloud` — only relevant if the adapter routes through the local gateway.
-6. Confirmation that the Paperclip host can **reach the ERPNext frontend** (`nuc.lan:4410`) over the network — `mcp_remote` requires Paperclip to dial ERPNext, not the reverse.
-7. The **role** that gates the AI workspace (default: System Manager).
+Resolved on 2026-08-06 by probing with the CEO agent key:
 
-Items 1–6 block the live smoke test and the chat SPA's transport decision (§7.1). The **MCP tool server — the bulk of the work — can be built and unit-tested without any of them.**
+- ✅ Paperclip company id — `06bb12c4-648e-4e05-a5ef-e32a8ee3ec06`
+- ✅ CEO agent exists — `d9654bd8-6382-4c3b-9b9b-050d533a59a8`
+- ✅ Adapter and model — `claude_local` / `claude-opus-5`. Kimi/Ollama question closed
+- ✅ Network — Paperclip and ERPNext share a LAN; `nuc.lan` = `192.168.10.118`, `:4410` responds `200`
+
+Still required:
+
+1. **A board API key.** The supplied key is an *agent* key: it reads `agents/me`, skills, goals and routines, but every `tools/*` route returns `403 Board access required`. Creating the tool connection, the gateway, and the tool policies all need board scope. **This is the blocking credential.**
+2. **Enable `enableConferenceRoomChat`** via `PATCH /api/instance/settings/experimental`. Confirmed off — board chat returns `FEATURE_DISABLED`. Without it there is no desk chat, only the slower issue-thread fallback (§7.1).
+3. **The LAN address ERPNext will be reached at** — `http://192.168.10.118:4410` unless the Paperclip host resolves `nuc.lan`. The public hostname must not be used.
+4. The **role** that gates the AI workspace (default: System Manager).
+5. Optional but recommended: a **spend cap** on the CEO agent (`budgetMonthlyCents` is currently `0`).
+
+Items 1–3 block the live smoke test and the chat transport decision. The **MCP tool server — the bulk of the work — can be built and unit-tested without any of them.**
