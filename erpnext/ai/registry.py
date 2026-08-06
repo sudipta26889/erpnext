@@ -10,12 +10,13 @@ pointed at the MCP endpoint.
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
 import frappe
 from frappe import _
+from frappe.model.document import Document
 
 # JSON-RPC application error code. -32000 is the generic "server error" slot.
 TOOL_ERROR_CODE = -32000
@@ -36,7 +37,6 @@ class Tool:
 	input_schema: dict
 	handler: Callable[..., Any]
 	tier: str = "free"
-	tags: list[str] = field(default_factory=list)
 
 
 _REGISTRY: dict[str, Tool] = {}
@@ -59,26 +59,38 @@ def tool(name: str, description: str, input_schema: dict, tier: str = "free") ->
 	return decorator
 
 
+# Invalidated by AISettings.on_update so long-lived workers pick up admin
+# changes (kill-switch, tightened caps) without a restart. See
+# erpnext/ai/doctype/ai_settings/ai_settings.py.
 @lru_cache(maxsize=1)
-def settings():
+def settings() -> Document:
 	return frappe.get_single("AI Settings")
 
 
-def _json_list(raw: str | None) -> list[str]:
+def _json_list(raw: str | None, field_label: str) -> list[str]:
+	"""Parse a Small Text JSON-list-of-strings field.
+
+	A blank field is genuinely empty and returns `[]` (for `enabled_tools`
+	that means "all tools", by design). Anything else that isn't a JSON list
+	of strings — including a value that fails to parse at all — raises so
+	callers fail closed instead of silently exposing everything.
+	"""
 	raw = (raw or "").strip()
 	if not raw:
 		return []
 	try:
 		value = json.loads(raw)
 	except ValueError:
-		return []
-	return [item for item in value if isinstance(item, str)]
+		raise ToolError(_("{0} is not valid JSON.").format(field_label)) from None
+	if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+		raise ToolError(_("{0} must be a JSON list of strings.").format(field_label))
+	return value
 
 
 def get_tools() -> list[Tool]:
 	"""Registered tools filtered by the AI Settings allowlist (empty means all)."""
 	_load_tool_modules()
-	allow = _json_list(settings().enabled_tools)
+	allow = _json_list(settings().enabled_tools, _("Enabled Tools"))
 	tools = list(_REGISTRY.values())
 	if allow:
 		tools = [t for t in tools if t.name in allow]
@@ -99,9 +111,19 @@ def clamp_limit(requested: int | None) -> int:
 	return min(int(requested), cap)
 
 
-def assert_value_within_cap(value: float, label: str) -> None:
+def assert_value_within_cap(value: float | None, label: str) -> None:
 	cap = float(settings().max_document_value or 0)
-	if cap and float(value or 0) > cap:
+	if not cap:
+		return  # 0 means unlimited: nothing to enforce, None passes harmlessly.
+	if value is None:
+		# A caller whose monetary lookup came back None must not be waved through
+		# uncapped just because `float(None or 0)` used to coerce to 0.
+		raise ToolError(
+			_("{0} value could not be determined, so the configured AI limit of {1} cannot be enforced.").format(
+				label, cap
+			)
+		)
+	if float(value) > cap:
 		# Refuse rather than trim: a silently shrunk document is worse than an error.
 		raise ToolError(
 			_("{0} value {1} exceeds the configured AI limit of {2}.").format(label, value, cap)
