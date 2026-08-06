@@ -37,3 +37,30 @@ def orientation_text() -> str:
 		currency=details.get("default_currency") or _("unknown"),
 		country=details.get("country") or _("unknown"),
 	)
+
+
+def workspace_map() -> dict[str, dict]:
+	"""Doctype -> {workspace, module, url}.
+
+	Answers "where is what" from this install's own Workspace links, so it
+	reflects customisations that no published manual ever will.
+	"""
+	links = frappe.get_all(
+		"Workspace Link",
+		filters={"link_type": "DocType", "type": "Link"},
+		fields=["link_to", "parent", "label"],
+	)
+	mapping: dict[str, dict] = {}
+	for link in links:
+		if not link.link_to or link.link_to in mapping:
+			continue
+		mapping[link.link_to] = {
+			"workspace": link.parent,
+			"module": frappe.db.get_value("DocType", link.link_to, "module"),
+			"url": desk_url(link.link_to),
+		}
+	return mapping
+
+
+def desk_url(doctype: str) -> str:
+	return "/app/" + frappe.scrub(doctype).replace("_", "-")
