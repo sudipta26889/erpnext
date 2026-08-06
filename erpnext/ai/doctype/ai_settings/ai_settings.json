@@ -1,0 +1,48 @@
+{
+ "actions": [],
+ "creation": "2026-08-06 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled", "paperclip_url", "paperclip_company_id", "board_api_key", "agent_id",
+  "column_break_1", "erpnext_company", "additional_companies", "allowed_roles",
+  "section_limits", "enabled_tools", "max_batch_size", "column_break_2",
+  "max_document_value", "allowed_methods"
+ ],
+ "fields": [
+  {"fieldname": "enabled", "fieldtype": "Check", "label": "Enabled", "default": "0"},
+  {"fieldname": "paperclip_url", "fieldtype": "Data", "label": "Paperclip URL",
+   "description": "Base URL, e.g. https://paperclip.sudiptadhara.in", "mandatory_depends_on": "enabled"},
+  {"fieldname": "paperclip_company_id", "fieldtype": "Data", "label": "Paperclip Company ID",
+   "description": "Paperclip's org/tenant UUID. NOT the ERPNext Company.", "mandatory_depends_on": "enabled"},
+  {"fieldname": "board_api_key", "fieldtype": "Password", "label": "Board API Key", "mandatory_depends_on": "enabled"},
+  {"fieldname": "agent_id", "fieldtype": "Data", "label": "CEO Agent ID", "mandatory_depends_on": "enabled"},
+  {"fieldname": "column_break_1", "fieldtype": "Column Break"},
+  {"fieldname": "erpnext_company", "fieldtype": "Link", "label": "ERPNext Company", "options": "Company",
+   "description": "The accounting entity the agent operates on.", "mandatory_depends_on": "enabled"},
+  {"fieldname": "additional_companies", "fieldtype": "Table MultiSelect", "label": "Additional Companies",
+   "options": "AI Company Item", "description": "Opt-in cross-company access. Empty by default."},
+  {"fieldname": "allowed_roles", "fieldtype": "Small Text", "label": "Allowed Roles",
+   "default": "[\"System Manager\"]", "description": "JSON list of roles permitted to use the AI workspace."},
+  {"fieldname": "section_limits", "fieldtype": "Section Break", "label": "Safety Limits"},
+  {"fieldname": "enabled_tools", "fieldtype": "Small Text", "label": "Enabled Tools",
+   "description": "JSON list of tool names. Empty means all registered tools."},
+  {"fieldname": "max_batch_size", "fieldtype": "Int", "label": "Max Batch Size", "default": "20"},
+  {"fieldname": "column_break_2", "fieldtype": "Column Break"},
+  {"fieldname": "max_document_value", "fieldtype": "Currency", "label": "Max Document Value",
+   "default": "0", "description": "0 means unlimited."},
+  {"fieldname": "allowed_methods", "fieldtype": "Small Text", "label": "Allowed Methods",
+   "default": "[]", "description": "JSON list of dotted paths callable via call_method."}
+ ],
+ "issingle": 1,
+ "modified": "2026-08-06 12:00:00.000000",
+ "module": "AI",
+ "name": "AI Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1}
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}
