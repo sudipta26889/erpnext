@@ -10,9 +10,14 @@
 
 Add an **AI** entry to the ERPNext desk icon rail, between Home and Invoicing, opening a chat agent that knows ERPNext in depth and can perform ERPNext operations — with human approval required for anything that changes the ledger.
 
-The agent itself does **not** live in ERPNext. Paperclip already implements agent hosting, skills, scheduled routines, goals, budgets, cost tracking, audit and — critically — human-in-the-loop approval of deferred tool calls. This project makes ERPNext a **governed tool provider** for that platform, plus a chat surface in the desk.
+**No AI is built here.** The agent is a Paperclip **CEO agent** — Paperclip models a company literally, and the first agent hired into a company is always the CEO (the `role` field is locked on first hire). Paperclip already provides agent hosting, org hierarchy, skills, scheduled routines, goals, budgets, cost tracking, audit, human-in-the-loop approval of deferred tool calls, **and a streaming board chat endpoint**.
 
-Long-term intent (user's words): the agent becomes a "cofounder / director / co-CEO / co-CTO". The autonomy level chosen for this work is **proactive advisor, human decides** — the agent may form its own agenda and draft actions, but every ledger-affecting write waits for a human click. Delegated spend authority is explicitly *not* in scope.
+This project therefore delivers exactly two things:
+
+1. **ERPNext as a governed MCP tool provider**, so the CEO agent can see and act on the business. This is the substantial work.
+2. **A desk chat surface** that talks to Paperclip's board chat and renders approvals inline.
+
+Long-term intent (user's words): the agent becomes a "cofounder / director / co-CEO / co-CTO". That framing maps onto Paperclip's own domain model rather than being bolted on — it ships `role: ceo|cto|cmo|cfo|…`, `reportsTo`, and approval kinds including `approve_ceo_strategy`, `hire_agent` and `request_board_approval`. The autonomy level chosen for this work is **proactive advisor, human decides** — the agent may form its own agenda and draft actions, but every ledger-affecting write waits for a human click. Delegated spend authority is explicitly *not* in scope.
 
 ### Decisions made with the user
 
@@ -20,7 +25,9 @@ Long-term intent (user's words): the agent becomes a "cofounder / director / co-
 |---|---|
 | Autonomy | Proactive advisor. Agent proposes; human approves. No autonomous writes |
 | Architecture | **A — Paperclip is the brain.** ERPNext provides MCP tools + a thin chat client |
-| Model | Pluggable via the existing LiteLLM gateway. Default `kimi-k3:cloud`, fallback `kimi-k2.6:cloud` |
+| The agent | A Paperclip **CEO agent** (first hire in the company). Not built here |
+| Chat transport | `POST /api/board/chat/stream` (board / "conference room" chat), **not** the issue-comment thread |
+| Model | Determined by the agent's **`adapterType`**, not a free-form setting. To run on the local LiteLLM/Ollama gateway (`kimi-k3:cloud`, fallback `kimi-k2.6:cloud`) the adapter must be `opencode_local`, or an `http`/`process` adapter pointed at the gateway |
 | Data egress | Cloud model routing accepted for business data |
 | HITL trigger | **Tiered by blast radius.** Reads and draft creation are free; submit / cancel / delete / updates to submitted docs / bulk / over-threshold require approval |
 | Permission model (v1) | **Role-gate the AI workspace.** Single service identity mirroring the permissions of the gated role. Multi-user identity passthrough deferred |
@@ -41,7 +48,12 @@ Everything below was confirmed against live systems or source on 2026-08-06, not
 - **Policy is declarative and testable**: `tools/policies` (create, reorder, duplicate), `tools/policy/test` ("Test tool policy decision"), `tools/profiles` bindable to company, agent, project, routine or issue.
 - **Tool-count is a solved problem**: named gateways accept `onDemandToolsConfig: {enabled, searchToolName: "search_tools", runToolName: "run_tool"}`, so a wide tool surface does not have to be loaded into context up-front.
 - **Traceability**: `metadataPolicy` can forward `companyId`, `gatewayId`, `projectId`, `issueId`, `agentId`, `runId`, `correlationId` to the tool server. Every ERPNext mutation can be tied to the exact agent run that caused it.
-- **Conversation model is `Issue → runs → comments`**: `POST /api/issues/{id}/comments`, `GET /api/issues/{issueId}/active-run`, `GET /api/issues/{issueId}/live-runs`, `GET /api/issues/{id}/runs`. This is a work thread, not a low-latency chat channel — see §7.1.
+- **A CEO agent is a first-class concept.** `POST /api/companies/{companyId}/agents` takes `role` from `["ceo","cto","cmo","cfo","security","engineer","designer","pm","qa","devops","researcher","general"]`, plus `reportsTo` (org hierarchy), `capabilities`, `desiredSkills`, `adapterType`, `budgetMonthlyCents` and `permissions`. Per Paperclip's documentation the **first agent hired into a company is locked to `ceo`**. Approval kinds include `approve_ceo_strategy`, `hire_agent`, `budget_override_required`, `request_board_approval`.
+- **Streaming board chat exists.** `POST /api/board/chat/stream` — *"Stream a board-level chat response (requires `enableConferenceRoomChat`)"*, body `{companyId, message, taskId}`. This is the chat surface for the desk tab. Two things remain **unverified pending a board API key**: whether `enableConferenceRoomChat` is enabled on this instance (`GET /api/instance/settings/experimental` returns `403` unauthenticated), and whether the response is SSE or chunked JSON — the spec declares `application/json` despite the name.
+- **Paperclip runs no LLM of its own.** Agents are external runtimes selected by `adapterType`: `["process","http","claude_local","codex_local","cursor_cloud","gemini_local","grok_local","hermes_gateway","hermes_local","opencode_local","pi_local","cursor","openclaw_gateway"]`. A Paperclip agent is effectively a coding-agent CLI running in an execution workspace — which is why MCP is the natural tool interface. **Consequence:** model choice is constrained by adapter (see the decisions table).
+- **Agents are not continuous.** They wake in *heartbeats*, work, and sleep, holding no context and consuming no budget in between — matching the `heartbeat-runs` endpoints.
+- Work threads also exist (`POST /api/issues/{id}/comments`, `GET /api/issues/{issueId}/active-run`, `/live-runs`, `/runs`) and remain the surface for routine output and long-running tasks, but they are **not** the chat path.
+- Feature flags observed on instance settings, relevant here: `enableConferenceRoomChat`, `enableBuiltInAgents`, `enableDecisions`, `enableGoalsSidebarLink`, `enableSummaries`, `enableTaskWatchdogs`.
 - Also present and reused rather than rebuilt: `routines` (+ triggers, revisions, runs), `heartbeat-runs` (+ events, log, watchdog decisions), `goals`, `costs`, `budgets` (per agent and per company), `secrets`, `skills` (versioned, forkable, test-runnable), `tool-gateway/audit`.
 - Auth schemes: `BoardSessionAuth` (cookie, Better Auth), `BoardApiKeyAuth` (bearer), `AgentBearerAuth` (bearer).
 
@@ -72,14 +84,16 @@ ERPNext core ships no native AI. Five third-party apps exist (NextAI, ChatNext, 
 
 ```
 ┌─ ERPNext desk ──────────────────────┐        ┌─ Paperclip ───────────────┐
-│  icon rail: Home · AI · Invoicing…  │        │  Agent "Co-founder"        │
-│  Workspace(type=Link → Page "ai")   │        │   ├ Skills                 │
-│         │                            │        │   ├ Tool policies         │
-│  React SPA (chat)  ───REST───────────┼───────▶│   ├ Budget + Costs        │
-│   · issue thread + comments         │        │   └ Approvals / Audit     │
-│   · approve/decline inline          │        └────────────┬──────────────┘
-└─────────────────────────────────────┘                     │ mcp_remote
-              ▲                                              ▼
+│  icon rail: Home · AI · Invoicing…  │        │  CEO agent (first hire)    │
+│  Workspace(type=Link → Page "ai")   │        │   adapterType → CLI runtime│
+│         │                            │        │   ├ Skills · Goals        │
+│  React SPA (chat)                   │        │   ├ Routines (heartbeats) │
+│   · POST /api/board/chat/stream ────┼───────▶│   ├ Tool policies         │
+│   · approve/decline inline          │        │   ├ Budget + Costs        │
+│   · run/approval state              │        │   └ Approvals / Audit     │
+└─────────────────────────────────────┘        └────────────┬──────────────┘
+              ▲                                              │ mcp_remote
+              │                                              ▼
         ┌─────┴──────────────────────────────────────────────────────┐
         │  erpnext.ai.mcp — whitelisted JSON-RPC endpoint            │
         │  runs as the ERPNext user bound to the API key             │
@@ -109,7 +123,9 @@ New module `AI` appended to `erpnext/modules.txt`.
 
 ### 3.2 AI Settings (new Single, module AI)
 
-Fields: `enabled` (Check), `paperclip_url` (Data), `board_api_key` (Password), `company_id` (Data), `agent_id` (Data), `default_model` (Data, default `kimi-k3:cloud`), `fallback_model` (Data, default `kimi-k2.6:cloud`), `allowed_roles` (Table MultiSelect → Role), `enabled_tools` (Small Text, JSON list), `max_batch_size` (Int, default 20), `max_document_value` (Currency, default 0 = unlimited), `allowed_methods` (Code/JSON, allowlist for `call_method`).
+Fields: `enabled` (Check), `paperclip_url` (Data), `board_api_key` (Password), `company_id` (Data), `agent_id` (Data, the CEO agent), `allowed_roles` (Table MultiSelect → Role), `enabled_tools` (Small Text, JSON list), `max_batch_size` (Int, default 20), `max_document_value` (Currency, default 0 = unlimited), `allowed_methods` (Code/JSON, allowlist for `call_method`).
+
+Deliberately **absent**: model and adapter settings. Those belong to the Paperclip agent (`adapterType`, `adapterConfig`, `budgetMonthlyCents`) and duplicating them in ERPNext would create two sources of truth that silently drift.
 
 Secrets live here as Password fields read via `get_password()`, never in env files — matching the TaskPilot Settings precedent. A "Test Connection" button calls Paperclip `GET /api/health`.
 
@@ -159,7 +175,9 @@ This deliberately **diverges from the `banking/` precedent**, which is a standal
 
 Because `[tool.bench.assets]` holds only one build config (already claimed by `banking`), the AI SPA gets its own `yarn build:ai` script rather than bench's default wiring — called out in the plan so it is not mistaken for a misconfiguration.
 
-Screens: a chat thread mapped onto a Paperclip issue; a tool-call transcript showing what the agent did; **inline approval cards** for pending action requests calling `POST /api/tool-gateway/action-requests/{id}/approve|decline`, so approvals never require leaving ERPNext; and a settings-gated empty state when AI Settings is not configured.
+Screens: a **streaming chat thread** driven by `POST /api/board/chat/stream` with `{companyId, message, taskId}`; a tool-call transcript showing what the agent did; **inline approval cards** for pending action requests calling `POST /api/tool-gateway/action-requests/{id}/approve|decline`, so approvals never require leaving ERPNext; and a settings-gated empty state when AI Settings is not configured.
+
+Because agents run in heartbeats rather than continuously, the UI must render agent state honestly — idle, waking, running, awaiting approval — rather than implying a always-on presence.
 
 All Paperclip calls are proxied through thin whitelisted ERPNext methods (`erpnext/ai/paperclip.py`) rather than issued from the browser, so the board API key is never exposed to the client and every proxy method re-checks the caller's role.
 
@@ -175,9 +193,14 @@ Additional controls: the MCP endpoint rejects requests when `enabled` is off; ra
 
 ## 7. Error handling
 
-### 7.1 Latency
+### 7.1 Latency and the conference-room flag
 
-Paperclip's conversation model is `Issue → runs → comments`, built for work rather than chat, so replies arrive by polling `active-run` / `live-runs` rather than streaming tokens. The SPA must therefore show run state honestly (queued / running / awaiting approval / done) instead of pretending to be an instant chat. If this proves too slow in use, the escape hatch is architecture B — a local chat loop that still routes every tool call through Paperclip's gateway — recorded in the roadmap.
+`POST /api/board/chat/stream` streams the reply, so the original latency objection to architecture A no longer applies and **architecture B is not needed**. Two residual risks remain, both resolvable only with a board API key:
+
+- **The flag may be off.** `enableConferenceRoomChat` is an experimental instance setting. If it cannot be enabled, the fallback is the `Issue → comments` work thread with polled `active-run` / `live-runs` state — noticeably slower, and the point at which architecture B would be worth reconsidering.
+- **The stream format is undeclared.** The endpoint advertises `application/json`, not `text/event-stream`. The SPA's transport layer must be written so SSE and chunked JSON are interchangeable behind one interface, rather than assuming either.
+
+Separately, heartbeat scheduling means a first message may wait for the agent to wake. That is a property of the platform, not a defect, and the UI surfaces it rather than hiding it.
 
 ### 7.2 Failure matrix
 
@@ -185,7 +208,9 @@ Paperclip's conversation model is `Issue → runs → comments`, built for work 
 |---|---|
 | Paperclip unreachable | AI tab shows a degraded banner. Rest of the desk unaffected — it is a separate workspace |
 | AI Settings unconfigured | Nav item present, tab shows a configuration prompt. No errors raised |
-| K3 unbilled / unavailable | Paperclip agent falls back to `kimi-k2.6:cloud` |
+| `enableConferenceRoomChat` off | Tab explains the flag is required and falls back to the issue-thread path (§7.1) |
+| CEO agent asleep | Chat shows "waking" state; message is queued, not lost |
+| Model/adapter unavailable | Handled inside Paperclip by the agent's adapter config; ERPNext surfaces the error verbatim |
 | `frappe.PermissionError` in a tool | JSON-RPC error with a clear, non-leaky message the agent can reason about |
 | Validation error on create/update | Returned verbatim so the agent can correct and retry |
 | Cap exceeded | Tool refuses with the cap named, so the agent can split the work |
@@ -208,9 +233,11 @@ Deferred with intent, tracked in `2026-08-06-erpnext-ai-roadmap.md`: the pgvecto
 ## 10. Required inputs before implementation can be verified end to end
 
 1. Paperclip **board API key** and the target **company id**.
-2. A Paperclip **agent** provisioned for this work (or approval to create one).
-3. **Ollama credit** for `kimi-k3:cloud`, or explicit acceptance of running on `kimi-k2.6:cloud`.
-4. Confirmation that the Paperclip host can **reach the ERPNext frontend** (`nuc.lan:4410`) over the network — `mcp_remote` requires Paperclip to dial ERPNext, not the reverse.
-5. The **role** that gates the AI workspace (default: System Manager).
+2. A **CEO agent** hired in that company (or approval to create one), and its `agent_id`.
+3. Confirmation that **`enableConferenceRoomChat`** (and `enableBuiltInAgents`, if built-in routines are wanted) is enabled at `GET /api/instance/settings/experimental` — currently unverifiable, returns `403` unauthenticated.
+4. The CEO agent's **`adapterType`**. To run on the local LiteLLM/Ollama gateway this needs `opencode_local` or an `http`/`process` adapter; `claude_local` / `gemini_local` bind the agent to those vendors instead.
+5. **Ollama credit** for `kimi-k3:cloud`, or explicit acceptance of `kimi-k2.6:cloud` — only relevant if the adapter routes through the local gateway.
+6. Confirmation that the Paperclip host can **reach the ERPNext frontend** (`nuc.lan:4410`) over the network — `mcp_remote` requires Paperclip to dial ERPNext, not the reverse.
+7. The **role** that gates the AI workspace (default: System Manager).
 
-Items 1–4 block the live smoke test only. All code and unit tests can be built and verified without them.
+Items 1–6 block the live smoke test and the chat SPA's transport decision (§7.1). The **MCP tool server — the bulk of the work — can be built and unit-tested without any of them.**

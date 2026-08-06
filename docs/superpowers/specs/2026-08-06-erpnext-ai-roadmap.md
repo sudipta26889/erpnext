@@ -70,9 +70,11 @@ The moment a second, less-privileged person should use the AI tab, this must be 
 
 ## Deferred: escape hatch to architecture B
 
-Architecture **A** was chosen (Paperclip is the brain). Its known weakness is latency: Paperclip's `Issue → runs → comments` model is built for work, not for snappy conversation, so the desk chat polls run state rather than streaming tokens.
+**Largely obsoleted on 2026-08-06.** Architecture A's known weakness was latency — the assumption that chat had to go through `Issue → runs → comments`. Further research found `POST /api/board/chat/stream` ("conference room" board chat), which streams replies directly. The spec now uses that, and architecture B is **not** planned.
 
-If that proves too slow in real use, the fallback is **architecture B**: run a lightweight agent loop inside Frappe against LiteLLM for chat responsiveness, while still routing *every tool call* through Paperclip's tool gateway so policy, approval, audit and cost tracking remain identical for chat and for routines. The MCP server built in spec 1 is unchanged and fully reused — this is an additive change, not a rewrite.
+It remains relevant in exactly one scenario: if `enableConferenceRoomChat` cannot be enabled on the instance, chat falls back to the polled issue thread, and the latency objection returns.
+
+In that case the fallback is **architecture B**: run a lightweight agent loop inside Frappe against LiteLLM for chat responsiveness, while still routing *every tool call* through Paperclip's tool gateway so policy, approval, audit and cost tracking remain identical for chat and for routines. The MCP server built in spec 1 is unchanged and fully reused — this is an additive change, not a rewrite.
 
 The property that must never be traded away for speed: **exactly one governed chokepoint through which the agent can touch the business.**
 
@@ -92,8 +94,11 @@ The next rungs, if ever wanted, each require real work *before* code:
 ## Smaller items
 
 - **Voice I/O.** Kokoro TTS (`nuc.lan:18880`), Whisper (`nuc.lan:19000`) and an Indic realtime voice endpoint are already on the LiteLLM gateway. A voice-driven cofounder is cheap to add once chat works.
-- **Ollama credit for K3.** `kimi-k3:cloud` currently returns *"extra usage balance is empty"*. Until topped up, the agent runs on `kimi-k2.6:cloud`, which was verified to do correct tool calling on 2026-08-06.
+- **Adapter choice constrains the model.** Paperclip agents are external CLI runtimes selected by `adapterType`: `["process","http","claude_local","codex_local","cursor_cloud","gemini_local","grok_local","hermes_gateway","hermes_local","opencode_local","pi_local","cursor","openclaw_gateway"]`. Running the CEO on the local LiteLLM/Ollama gateway requires `opencode_local` or a custom `http`/`process` adapter — `claude_local` and `gemini_local` bind to those vendors instead. Worth a spike before committing.
+- **Ollama credit for K3.** `kimi-k3:cloud` currently returns *"extra usage balance is empty"*. Until topped up, `kimi-k2.6:cloud` is the fallback and was verified to do correct tool calling on 2026-08-06. Only relevant if the adapter routes through the local gateway.
 - **Data egress.** K3 and K2.6 are both **Ollama Cloud**, so business data leaves the network — accepted by the user, but revisit if the local stack ever gains a competent tool-calling model. `gpt-oss:20b`, `qwen3:14b` and `mistral-small:24b` are the genuinely local options.
+- **Built-in agents and routines.** `enableBuiltInAgents` gates a set of pre-provisioned agents with managed routines (`built-in-agents/{key}/provision|reconcile|reset|status` and `.../routines/{routineKey}/enable|disable|run`). Worth inspecting before hand-authoring the spec-3 beats — some may already exist.
+- **Paperclip org modelling.** `role` (ceo/cto/cmo/cfo/…), `reportsTo`, `hire_agent`, `approve_ceo_strategy`, `request_board_approval`, per-agent `budgetMonthlyCents`. If the company ever grows past one agent, this is the hierarchy to use rather than inventing one.
 - **Narrow the Postgres role.** `erpnext_db_user` is a Postgres **superuser** — more privilege than Frappe requires. Unrelated to this project but worth fixing.
 - **Domain-specific tools.** Considered and not chosen for v1: purpose-built tools for high-traffic flows (quotation from opportunity, bank line reconciliation, stock entry posting). Add only if the generic tools prove unreliable on those paths.
 - **Paperclip Skill for ERPNext.** A versioned, test-runnable skill holding ERPNext procedural knowledge, living beside the agent. Complements spec 2 rather than replacing it.
