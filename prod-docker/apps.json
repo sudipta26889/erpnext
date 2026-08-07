@@ -2,5 +2,9 @@
   {
     "url": "git://10.201.0.1:4444/erpnext",
     "branch": "main"
+  },
+  {
+    "url": "https://github.com/resilient-tech/india-compliance.git",
+    "branch": "develop"
   }
 ]
