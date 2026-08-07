@@ -70,6 +70,35 @@ class TestReadTools(IntegrationTestCase):
 		with self.assertRaises(registry.ToolError):
 			documents.search_documents("Version", fields=["name"])
 
+	def test_search_documents_denies_user_without_permission_same_as_unknown_doctype(self):
+		# IMPORTANT 5: GL Entry read is restricted to Accounts User/Manager/
+		# Auditor -- mirrors describe_doctype's identical pattern
+		# (test_discovery.py). Before this fix, frappe.get_list()'s own
+		# permission check let this surface as a bare frappe.PermissionError,
+		# distinguishable through the MCP transport from the ToolError an
+		# unknown doctype name raises -- an existence oracle for custom
+		# doctypes.
+		user_email = "ai-search-lowpriv@example.com"
+		if not frappe.db.exists("User", user_email):
+			frappe.get_doc(
+				{
+					"doctype": "User",
+					"email": user_email,
+					"first_name": "AI Search Low Priv",
+					"send_welcome_email": 0,
+					"roles": [{"role": "Sales User"}],
+				}
+			).insert(ignore_permissions=True)
+
+		frappe.set_user(user_email)
+		try:
+			with self.assertRaises(registry.ToolError) as ctx:
+				documents.search_documents("GL Entry")
+		finally:
+			frappe.set_user("Administrator")
+
+		self.assertEqual(str(ctx.exception), frappe._("No such doctype: {0}").format("GL Entry"))
+
 	def test_search_documents_rejects_deleted_document_doctype(self):
 		# Deleted Document stores the full JSON of any deleted document, any
 		# company included, with no `company` field to scope on.
@@ -157,6 +186,34 @@ class TestReadTools(IntegrationTestCase):
 		with self.assertRaises(registry.ToolError):
 			reports.run_report("Not A Report")
 
+	def test_run_report_denies_user_without_permission_same_as_unknown_report(self):
+		# IMPORTANT 5: General Ledger's ref_doctype is GL Entry, read-restricted
+		# to Accounts User/Manager/Auditor -- Sales User has none of those.
+		# Before this fix, get_report_doc() inside run_query_report() let that
+		# surface as a bare frappe.PermissionError, distinguishable from the
+		# ToolError a genuinely unknown report name raises -- reintroducing
+		# exactly what list_reports' permission filter exists to hide.
+		user_email = "ai-report-lowpriv@example.com"
+		if not frappe.db.exists("User", user_email):
+			frappe.get_doc(
+				{
+					"doctype": "User",
+					"email": user_email,
+					"first_name": "AI Report Low Priv",
+					"send_welcome_email": 0,
+					"roles": [{"role": "Sales User"}],
+				}
+			).insert(ignore_permissions=True)
+
+		frappe.set_user(user_email)
+		try:
+			with self.assertRaises(registry.ToolError) as ctx:
+				reports.run_report("General Ledger")
+		finally:
+			frappe.set_user("Administrator")
+
+		self.assertEqual(str(ctx.exception), frappe._("No such report: {0}").format("General Ledger"))
+
 	def test_run_report_executes_successfully(self):
 		out = reports.run_report(
 			"General Ledger", filters={"from_date": "2020-01-01", "to_date": "2030-01-01"}
@@ -229,6 +286,13 @@ class TestMCPPermissionBoundary(IntegrationTestCase):
 		doc.board_api_key = "secret"
 		self.company = frappe.db.get_value("Company", {}, "name")
 		doc.erpnext_company = self.company
+		# IMPORTANT 4's transport-level role gate (mcp._route -> paperclip.
+		# assert_ai_user) would otherwise refuse this class's low-priv user
+		# before tools/call ever runs -- this class exists to test the
+		# *document*-level permission boundary tools/call enforces, not the
+		# workspace-access gate, so the low-priv role must be explicitly
+		# admitted here.
+		doc.allowed_roles = '["System Manager", "Sales User"]'
 		doc.save()
 
 		self.user_email = "ai-lowpriv@example.com"
@@ -271,6 +335,32 @@ class TestMCPPermissionBoundary(IntegrationTestCase):
 		finally:
 			frappe.local.flags.ignore_chart_of_accounts = previous_flag
 
+	def _readmit_low_priv_user_after_rollback(self):
+		"""Re-apply setUp()'s entire AI Settings save after a dispatch() call
+		that rolled back the transaction.
+
+		CRITICAL 2: every refusal branch in tools/call now calls
+		frappe.db.rollback() so a failed call can't leave partial writes
+		behind -- correct, but it also undoes anything else uncommitted in
+		this test's transaction, including *all* of setUp()'s AI Settings
+		save, not just allowed_roles (re-setting allowed_roles alone on a
+		freshly-reloaded doc still leaves `enabled` reverted to its
+		pre-setUp value, which then fails the `enabled` check right after the
+		role gate). Tests below that make two dispatch() calls must fully
+		re-admit this class's low-priv user before the second call.
+		"""
+		frappe.set_user("Administrator")
+		doc = frappe.get_single("AI Settings")
+		doc.enabled = 1
+		doc.paperclip_url = "https://paperclip.example.com"
+		doc.paperclip_company_id = "c-1"
+		doc.agent_id = "a-1"
+		doc.board_api_key = "secret"
+		doc.erpnext_company = self.company
+		doc.allowed_roles = '["System Manager", "Sales User"]'
+		doc.save()
+		frappe.set_user(self.user_email)
+
 	def test_low_privilege_user_is_denied_through_tools_call(self):
 		from erpnext.ai import mcp
 
@@ -285,8 +375,13 @@ class TestMCPPermissionBoundary(IntegrationTestCase):
 		)
 		self.assertTrue(out["result"]["isError"])
 		text = out["result"]["content"][0]["text"]
-		# The message must state refusal without revealing whether records exist.
-		self.assertIn("Not permitted", text)
+		# IMPORTANT 5: search_documents now collapses "exists but unreadable"
+		# into the same "No such doctype" wording an unknown doctype name
+		# gets (see TestReadTools.
+		# test_search_documents_denies_user_without_permission_same_as_unknown_doctype)
+		# -- still a refusal that reveals nothing about records, just no
+		# longer distinguishable from "doctype doesn't exist".
+		self.assertEqual(text, frappe._("No such doctype: {0}").format("GL Entry"))
 		self.assertNotIn("rows", text.lower())
 
 	def test_get_document_same_message_for_missing_and_unreadable_record(self):
@@ -300,23 +395,29 @@ class TestMCPPermissionBoundary(IntegrationTestCase):
 		ts.insert(ignore_permissions=True)
 
 		frappe.set_user(self.user_email)
-		missing = mcp.dispatch(
+		# CRITICAL 2: the unreadable-record call below also lands in the
+		# rollback-triggering PermissionError branch, so it must run *before*
+		# anything else rolls back the transaction `ts` was inserted in --
+		# otherwise `ts` itself would be gone by the time this call looks it up.
+		unreadable = mcp.dispatch(
 			{
 				"jsonrpc": "2.0",
 				"id": 1,
+				"method": "tools/call",
+				"params": {"name": "get_document", "arguments": {"doctype": "Timesheet", "name": ts.name}},
+			}
+		)
+
+		self._readmit_low_priv_user_after_rollback()
+		missing = mcp.dispatch(
+			{
+				"jsonrpc": "2.0",
+				"id": 2,
 				"method": "tools/call",
 				"params": {
 					"name": "get_document",
 					"arguments": {"doctype": "Timesheet", "name": "TS-DOES-NOT-EXIST"},
 				},
-			}
-		)
-		unreadable = mcp.dispatch(
-			{
-				"jsonrpc": "2.0",
-				"id": 2,
-				"method": "tools/call",
-				"params": {"name": "get_document", "arguments": {"doctype": "Timesheet", "name": ts.name}},
 			}
 		)
 
@@ -342,25 +443,30 @@ class TestMCPPermissionBoundary(IntegrationTestCase):
 		other_company = self._make_second_company()
 
 		frappe.set_user(self.user_email)
-		missing = mcp.dispatch(
+		# CRITICAL 2: same ordering requirement as the unreadable-record test
+		# above -- this call's own PermissionError branch rolls back the
+		# transaction other_company was created in, so it must run first.
+		out_of_scope = mcp.dispatch(
 			{
 				"jsonrpc": "2.0",
 				"id": 1,
 				"method": "tools/call",
 				"params": {
 					"name": "get_document",
-					"arguments": {"doctype": "Company", "name": "No Such Company Ltd"},
+					"arguments": {"doctype": "Company", "name": other_company},
 				},
 			}
 		)
-		out_of_scope = mcp.dispatch(
+
+		self._readmit_low_priv_user_after_rollback()
+		missing = mcp.dispatch(
 			{
 				"jsonrpc": "2.0",
 				"id": 2,
 				"method": "tools/call",
 				"params": {
 					"name": "get_document",
-					"arguments": {"doctype": "Company", "name": other_company},
+					"arguments": {"doctype": "Company", "name": "No Such Company Ltd"},
 				},
 			}
 		)

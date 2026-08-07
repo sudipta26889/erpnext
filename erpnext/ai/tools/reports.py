@@ -48,7 +48,12 @@ def run_report(report: str, filters: dict | None = None) -> dict:
 	# the Report's own permitted roles (doc.is_permitted()) and
 	# frappe.has_permission(ref_doctype, "report") -- strictly stronger than a
 	# bare check_permission("read") on the Report doctype, which is all a
-	# separate check here would add.
+	# separate check here would add. But letting that frappe.PermissionError
+	# escape uncaught would reopen the same existence oracle list_reports'
+	# permission filter exists to hide: mcp.py's tools/call handler collapses
+	# an unpermitted-report PermissionError into a *different* uniform "Not
+	# permitted..." message than the ToolError branch above echoes verbatim
+	# for an unknown report name -- see the except clause below.
 	if filters is not None and not isinstance(filters, dict):
 		# Mirrors scope_filters()'s shape guard: Frappe's list filter form
 		# would otherwise reach dict(filters or {}) below and raise a bare
@@ -67,7 +72,12 @@ def run_report(report: str, filters: dict | None = None) -> dict:
 	else:
 		applied["company"] = scoping.default_company()
 
-	result = run_query_report(report_name=report, filters=applied, ignore_prepared_report=True)
+	try:
+		result = run_query_report(report_name=report, filters=applied, ignore_prepared_report=True)
+	except frappe.PermissionError:
+		# Same message as the nonexistent-report branch above, deliberately --
+		# see the comment above this function's body.
+		raise ToolError(_("No such report: {0}").format(report)) from None
 	rows = result.get("result") or []
 	cap = clamp_limit(None)
 	return {

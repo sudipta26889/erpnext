@@ -15,7 +15,7 @@ from typing import Any
 import frappe
 from frappe import _
 
-from erpnext.ai import registry
+from erpnext.ai import paperclip, registry
 from erpnext.ai.registry import ToolError
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -25,6 +25,7 @@ INVALID_REQUEST = -32600
 PARSE_ERROR = -32700
 INTERNAL_ERROR = -32603
 AI_DISABLED = -32001
+AI_FORBIDDEN = -32002
 
 
 def _error(request_id: Any, code: int, message: str) -> dict:
@@ -111,6 +112,15 @@ def dispatch(payload: Any) -> dict | None:
 		# check. Still a JSON-RPC error object, never an unhandled exception.
 		return _error(request_id, exc.code, str(exc))
 	except Exception:
+		# CRITICAL 2: whatever ran inside _route() before this raised may have
+		# already written -- e.g. a tool handler resolved and partially ran
+		# before an exception escaped its own try/except below. Nothing here
+		# may survive request teardown's commit as if it had succeeded.
+		# frappe.db.rollback() doesn't touch frappe.local.message_log, so it's
+		# safe on either side of _log_deferred() below; rollback runs first so
+		# the transaction is recovered (PostgreSQL refuses further statements
+		# after an aborted one) before anything else touches it.
+		frappe.db.rollback()
 		_log_deferred("ERPNext AI dispatch failure")
 		return _error(
 			request_id, INTERNAL_ERROR, _("An internal error occurred in ERPNext; it has been logged.")
@@ -118,6 +128,20 @@ def dispatch(payload: Any) -> dict | None:
 
 
 def _route(request_id: Any, method: str, params: dict) -> dict:
+	# IMPORTANT 4: must run before the `enabled` check below, and before any
+	# method branch -- an unauthorized session must be refused for who is
+	# asking, not only for whether the feature is switched on.
+	# get_company_context in particular survives entirely on permission-free
+	# reads (frappe.db.get_value, frappe.get_all's ignore_permissions=True,
+	# frappe.db.count), so without this gate any authenticated session --
+	# including a portal/Website User -- could read company name, currency,
+	# chart-of-accounts roots, active modules and record counts through that
+	# one tool alone.
+	try:
+		paperclip.assert_ai_user()
+	except frappe.PermissionError as exc:
+		return _error(request_id, AI_FORBIDDEN, str(exc))
+
 	if not registry.settings().enabled:
 		return _error(request_id, AI_DISABLED, _("ERPNext AI is disabled in AI Settings."))
 
@@ -148,10 +172,32 @@ def _route(request_id: Any, method: str, params: dict) -> dict:
 	if method == "tools/call":
 		name = params.get("name") or ""
 		arguments = params.get("arguments") or {}
+		# CRITICAL 2: every except branch below turns a failed call into a
+		# *successful* JSON-RPC result (_result(), not _error()) so the model
+		# gets readable text instead of a transport error -- but that also
+		# means handle() returns normally, so Frappe's request teardown
+		# commits the transaction. A tool that inserted/saved/submitted
+		# something and *then* raised must not have that work survive just
+		# because the response says "error". frappe.db.rollback() is called
+		# first in every branch below, before any logging: it doesn't touch
+		# frappe.local.message_log (rollback is a DB operation, message_log is
+		# an in-process list), so the order is safe either way, but rolling
+		# back first also recovers the transaction (PostgreSQL refuses further
+		# statements after an aborted one) before _log_deferred()'s own
+		# frappe.log_error() call needs to touch anything. The success path
+		# above (`return _result(request_id, _text_content(handler(...)))`)
+		# never reaches any of this, so a successful call is never rolled back.
 		try:
 			handler = registry.get_tool(name).handler
 			return _result(request_id, _text_content(handler(**arguments)))
 		except ToolError as exc:
+			frappe.db.rollback()
+			# IMPORTANT 6: a ToolError can fire *after* real work already ran
+			# ERPNext's validate chain (e.g. the value cap firing after
+			# doc.insert() succeeded), which can have msgprint()'d business
+			# notices naming other records. Those must not ride along as
+			# _server_messages next to this deliberately sanitized message.
+			frappe.clear_messages()
 			return _result(request_id, _text_content(str(exc), is_error=True))
 		except (frappe.PermissionError, frappe.DoesNotExistError):
 			# Deliberately uninformative about existence: saying "no such record"
@@ -164,6 +210,7 @@ def _route(request_id: Any, method: str, params: dict) -> dict:
 			# ("Sales Invoice ABC-001 not found") this branch exists to hide —
 			# _log_deferred() clears it so it doesn't ride along in the same
 			# response as _server_messages / messages.
+			frappe.db.rollback()
 			_log_deferred("ERPNext AI tool permission or missing record")
 			return _result(
 				request_id,
@@ -174,13 +221,18 @@ def _route(request_id: Any, method: str, params: dict) -> dict:
 			# verbatim: it's exactly what lets the agent correct itself and retry.
 			# frappe.local.message_log is deliberately left untouched here too —
 			# it holds the same text already going out in `result`, not anything
-			# the agent doesn't already have.
+			# the agent doesn't already have. Still rolled back, though: a
+			# validation failure can fire after an earlier statement in the same
+			# call already wrote (e.g. a child row insert before a parent-level
+			# validate() raises), and none of that may survive either.
+			frappe.db.rollback()
 			return _result(request_id, _text_content(str(exc), is_error=True))
 		except TypeError:
 			# Catches a TypeError raised *inside* a handler too, not only a
 			# caller argument mismatch — str(exc) can name internal callables,
 			# so (like the generic branch below) this is logged and given a
 			# fixed message rather than echoed verbatim.
+			frappe.db.rollback()
 			_log_deferred("ERPNext AI tool bad arguments")
 			return _result(
 				request_id,
@@ -193,6 +245,7 @@ def _route(request_id: Any, method: str, params: dict) -> dict:
 			# Never surface str(exc) here: it can echo table/constraint names, SQL
 			# fragments and file paths to an external agent. Only the logged
 			# traceback carries that detail; the caller gets a fixed message.
+			frappe.db.rollback()
 			_log_deferred("ERPNext AI tool failure")
 			return _result(
 				request_id,

@@ -120,6 +120,82 @@ class TestWriteTools(IntegrationTestCase):
 				with self.assertRaises(registry.ToolError):
 					documents.create_document(doctype, {}, idempotency_key=f"k-forbidden-doctype-{doctype}")
 
+	def test_create_document_rejects_scheduler_armed_doctypes(self):
+		# CRITICAL 1: each of these can arm a privileged effect that fires
+		# later off a scheduled job, with no gated tool name anywhere in that
+		# later path and no human in the loop when it actually happens --
+		# see scoping.WRITE_FORBIDDEN_DOCTYPES.
+		for doctype in (
+			"Subscription",
+			"Auto Repeat",
+			"Process Statement Of Accounts",
+			"Email Campaign",
+			"Notification",
+			"Auto Email Report",
+		):
+			with self.subTest(doctype=doctype):
+				with self.assertRaises(registry.ToolError):
+					documents.create_document(doctype, {}, idempotency_key=f"k-scheduler-armed-{doctype}")
+
+	def test_create_document_rejects_subscription_with_submit_invoice_armed(self):
+		# The exact bypass this fix closes: Subscription carries a `company`
+		# field (passes assert_scopable) and submit_invoice reads as ordinary
+		# business data (passes _assert_no_forbidden_keys) -- hooks.py's daily
+		# process_subscription job submits the resulting Sales Invoice (GL
+		# postings, indefinitely) with no gated tool name anywhere in that path.
+		with self.assertRaises(registry.ToolError):
+			documents.create_document(
+				"Subscription",
+				{"company": self.company, "submit_invoice": 1},
+				idempotency_key="k-subscription-submit-invoice",
+			)
+
+	def test_create_document_rejects_permission_and_global_config_doctypes(self):
+		# IMPORTANT 3: all company-less, so they would otherwise pass
+		# assert_scopable() unchallenged on this single-company site.
+		for doctype in (
+			"User Permission",
+			"DocShare",
+			"Custom Role",
+			"Role Permission for Page and Report",
+			"System Settings",
+			"Accounts Settings",
+			"Stock Settings",
+			"Buying Settings",
+			"Selling Settings",
+		):
+			with self.subTest(doctype=doctype):
+				with self.assertRaises(registry.ToolError):
+					documents.create_document(doctype, {}, idempotency_key=f"k-permission-global-{doctype}")
+
+	def test_create_document_denies_user_without_permission_same_as_unknown_doctype(self):
+		# IMPORTANT 5: mirrors search_documents' identical pattern
+		# (test_read_tools.py) and describe_doctype's original
+		# (test_discovery.py). Before this fix, doc.insert()'s own
+		# create-permission check let an existing-but-uncreatable doctype
+		# surface as a bare frappe.PermissionError, distinguishable through
+		# the MCP transport from the ToolError an unknown doctype name raises.
+		user_email = "ai-create-lowpriv@example.com"
+		if not frappe.db.exists("User", user_email):
+			frappe.get_doc(
+				{
+					"doctype": "User",
+					"email": user_email,
+					"first_name": "AI Create Low Priv",
+					"send_welcome_email": 0,
+					"roles": [{"role": "Sales User"}],
+				}
+			).insert(ignore_permissions=True)
+
+		frappe.set_user(user_email)
+		try:
+			with self.assertRaises(registry.ToolError) as ctx:
+				documents.create_document("GL Entry", {}, idempotency_key="k-create-permission-oracle")
+		finally:
+			frappe.set_user("Administrator")
+
+		self.assertEqual(str(ctx.exception), frappe._("No such doctype: {0}").format("GL Entry"))
+
 	# -- update_document ------------------------------------------------
 
 	def test_update_rejects_submitted_documents(self):
@@ -384,6 +460,13 @@ class TestMCPWriteToolsPermissionBoundary(IntegrationTestCase):
 		doc.board_api_key = "secret"
 		self.company = frappe.db.get_value("Company", {}, "name")
 		doc.erpnext_company = self.company
+		# IMPORTANT 4's transport-level role gate (mcp._route -> paperclip.
+		# assert_ai_user) would otherwise refuse this class's low-priv user
+		# before tools/call ever runs -- this class exists to test the
+		# *document*-level permission boundary tools/call enforces, not the
+		# workspace-access gate, so the low-priv role must be explicitly
+		# admitted here.
+		doc.allowed_roles = '["System Manager", "Sales User"]'
 		doc.save()
 
 		self.user_email = "ai-write-lowpriv@example.com"
@@ -402,6 +485,33 @@ class TestMCPWriteToolsPermissionBoundary(IntegrationTestCase):
 		frappe.set_user("Administrator")
 		frappe.db.rollback()
 
+	def _readmit_low_priv_user_after_rollback(self):
+		"""Re-apply setUp()'s entire AI Settings save after a dispatch() call
+		that rolled back the transaction.
+
+		CRITICAL 2: every refusal branch in tools/call now calls
+		frappe.db.rollback() so a failed call can't leave partial writes
+		behind -- correct, but it also undoes anything else uncommitted in
+		this test's transaction, including *all* of setUp()'s AI Settings
+		save, not just allowed_roles (re-setting allowed_roles alone on a
+		freshly-reloaded doc still leaves `enabled` reverted to its
+		pre-setUp value, which then fails the `enabled` check right after the
+		role gate). Mirrors
+		TestMCPPermissionBoundary._readmit_low_priv_user_after_rollback in
+		test_read_tools.py.
+		"""
+		frappe.set_user("Administrator")
+		doc = frappe.get_single("AI Settings")
+		doc.enabled = 1
+		doc.paperclip_url = "https://paperclip.example.com"
+		doc.paperclip_company_id = "c-1"
+		doc.agent_id = "a-1"
+		doc.board_api_key = "secret"
+		doc.erpnext_company = self.company
+		doc.allowed_roles = '["System Manager", "Sales User"]'
+		doc.save()
+		frappe.set_user(self.user_email)
+
 	def test_missing_and_unwritable_document_give_the_same_message(self):
 		from erpnext.ai import mcp
 
@@ -410,37 +520,56 @@ class TestMCPWriteToolsPermissionBoundary(IntegrationTestCase):
 		# just another "doesn't exist" case in disguise.
 		note = frappe.get_doc({"doctype": "Note", "title": "write-boundary"})
 		note.insert(ignore_permissions=True)
+		# CRITICAL 2: both dispatch() calls below land in a branch that now
+		# calls frappe.db.rollback() -- a *full* rollback, not scoped to a
+		# savepoint, so it would otherwise also undo this uncommitted insert,
+		# making the "note still exists" sanity check below meaningless (it
+		# would report "gone" regardless of whether delete_document actually
+		# ran). Committing here mirrors production, where this record would
+		# already be durable from an earlier, separate request; the finally
+		# block below cleans it up explicitly since a plain rollback can no
+		# longer do it for this one record.
+		frappe.db.commit()
+		try:
+			frappe.set_user(self.user_email)
+			unwritable = mcp.dispatch(
+				{
+					"jsonrpc": "2.0",
+					"id": 1,
+					"method": "tools/call",
+					"params": {
+						"name": "delete_document",
+						"arguments": {"doctype": "Note", "name": note.name},
+					},
+				}
+			)
 
-		frappe.set_user(self.user_email)
-		missing = mcp.dispatch(
-			{
-				"jsonrpc": "2.0",
-				"id": 1,
-				"method": "tools/call",
-				"params": {
-					"name": "delete_document",
-					"arguments": {"doctype": "Note", "name": "NOTE-DOES-NOT-EXIST"},
-				},
-			}
-		)
-		unwritable = mcp.dispatch(
-			{
-				"jsonrpc": "2.0",
-				"id": 2,
-				"method": "tools/call",
-				"params": {"name": "delete_document", "arguments": {"doctype": "Note", "name": note.name}},
-			}
-		)
+			self._readmit_low_priv_user_after_rollback()
+			missing = mcp.dispatch(
+				{
+					"jsonrpc": "2.0",
+					"id": 2,
+					"method": "tools/call",
+					"params": {
+						"name": "delete_document",
+						"arguments": {"doctype": "Note", "name": "NOTE-DOES-NOT-EXIST"},
+					},
+				}
+			)
 
-		missing_text = missing["result"]["content"][0]["text"]
-		unwritable_text = unwritable["result"]["content"][0]["text"]
-		self.assertTrue(missing["result"]["isError"])
-		self.assertTrue(unwritable["result"]["isError"])
-		self.assertEqual(missing_text, unwritable_text)
-		self.assertEqual(missing_text, frappe._("Not permitted for the current ERPNext user."))
+			missing_text = missing["result"]["content"][0]["text"]
+			unwritable_text = unwritable["result"]["content"][0]["text"]
+			self.assertTrue(missing["result"]["isError"])
+			self.assertTrue(unwritable["result"]["isError"])
+			self.assertEqual(missing_text, unwritable_text)
+			self.assertEqual(missing_text, frappe._("Not permitted for the current ERPNext user."))
 
-		# Sanity check: the document must still exist -- proves the
-		# "unwritable" branch was a genuine denial, not a delete that
-		# silently no-op'd.
-		frappe.set_user("Administrator")
-		self.assertTrue(frappe.db.exists("Note", note.name))
+			# Sanity check: the document must still exist -- proves the
+			# "unwritable" branch was a genuine denial, not a delete that
+			# silently no-op'd.
+			frappe.set_user("Administrator")
+			self.assertTrue(frappe.db.exists("Note", note.name))
+		finally:
+			frappe.set_user("Administrator")
+			frappe.delete_doc("Note", note.name, force=True, ignore_permissions=True)
+			frappe.db.commit()

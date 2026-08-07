@@ -110,3 +110,15 @@ The next rungs, if ever wanted, each require real work *before* code:
 Carried forward so it is not lost behind this project:
 
 - **TaskPilot Settings remain unconfigured** — no workspace slug or API key supplied, so the Projects module runs in graceful disabled mode. The live TaskPilot smoke test has never run. First question it must answer: **does `list_projects` return archived projects?** (migration idempotency for Completed projects depends on the answer).
+
+---
+
+## `WRITE_FORBIDDEN_DOCTYPES` is structurally the wrong shape (interim measure)
+
+**Recorded 2026-08-07, during the pre-merge review fix wave that added the scheduler-armed-auto-submit doctypes (Subscription, Auto Repeat, Process Statement Of Accounts, Email Campaign, Notification, Auto Email Report) plus the permission/global-config doctypes to `erpnext/ai/scoping.py`'s deny-list.**
+
+The invariant this whole feature depends on is: **no privileged effect without a call to a gated tool name** (`submit_document`/`cancel_document`/`delete_document`/`call_method`). That property belongs to what a doctype's controller and the scheduler *do* with the fields a free-tier `create_document`/`update_document` call can set — not to the doctype's name. A denylist keyed on name can only ever enumerate doctypes someone has already thought to check. Every entry added in this pass (and the two families added in the previous review round before it) was found by a human reading `hooks.py`'s scheduler jobs and imagining the attack, one doctype at a time. There is no reason to believe that process is exhaustive, and every ERPNext release can add a new scheduled job or a new "submit on X" checkbox to a doctype nobody has vetted yet — the deny-list does not get safer over time, it only gets less wrong for the doctypes someone remembered to look at.
+
+**The correct fix is an allowlist**: a vetted list of business doctypes `create_document`/`update_document` may touch at all, each one checked (once, deliberately) for exactly this property — no field on it, in combination with any scheduler job or hook shipped by frappe or erpnext, can cause a submit/cancel/delete/mass-send effect without the call passing through a gated tool name. Anything not on that list is refused by construction, including doctypes nobody has thought about yet, which is the property a denylist can never have.
+
+**Not implemented now.** This section exists so the shape of the current fix is not mistaken for the real fix. The denylist added in this pass is a legitimate interim measure — it closes every concretely-identified hole — but it is not the invariant; it is a best-effort approximation of it that requires a human to keep finding the next hole.

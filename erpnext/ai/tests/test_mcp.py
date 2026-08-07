@@ -20,7 +20,13 @@ _THROWAWAY_TOOL_NAMES = [
 	"_test_throws_does_not_exist",
 	"_test_throws_permission_error",
 	"_test_throws_unexpected",
+	"_test_inserts_then_raises",
+	"_test_msgprints_then_raises_tool_error",
 ]
+
+# A stable marker so tests can assert on presence/absence without depending on
+# autoname/creation order.
+_LEFTOVER_NOTE_TITLE = "_test_inserts_then_raises leftover"
 
 
 @registry.tool(
@@ -85,6 +91,33 @@ def _throw_permission_error():
 )
 def _throw_unexpected():
 	frappe.throw(frappe._("leaked detail: tabSales Invoice constraint violated"), RuntimeError)
+
+
+@registry.tool(
+	name="_test_inserts_then_raises",
+	description="Test-only tool that inserts a document and then raises.",
+	input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+)
+def _insert_then_raise():
+	# CRITICAL 2 regression guard: a tool that writes and then fails must
+	# leave nothing behind -- tools/call reporting isError=True must not
+	# coexist with the insert surviving request teardown's commit.
+	frappe.get_doc({"doctype": "Note", "title": _LEFTOVER_NOTE_TITLE}).insert()
+	raise RuntimeError("boom after insert")
+
+
+@registry.tool(
+	name="_test_msgprints_then_raises_tool_error",
+	description="Test-only tool that msgprints then raises ToolError.",
+	input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+)
+def _msgprint_then_raise_tool_error():
+	# IMPORTANT 6 regression guard: a ToolError can fire after real work
+	# already msgprint()'d business notices (e.g. the value cap firing after
+	# doc.insert() ran the validate chain) -- those must not ride along as
+	# _server_messages next to the sanitized ToolError text.
+	frappe.msgprint("leaky detail naming another record")
+	raise registry.ToolError("clean tool error message")
 
 
 class TestMCP(IntegrationTestCase):
@@ -346,4 +379,112 @@ class TestMCP(IntegrationTestCase):
 		out = self._handle(body)
 		payload = json.loads(out["result"]["content"][0]["text"])
 		self.assertTrue(payload["pong"])
+		self.assertFalse(out["result"].get("isError", False))
+
+	# -- CRITICAL 2: a failed tool call must roll back, not commit partially --
+
+	def test_failed_tool_call_rolls_back_partial_writes(self):
+		self.assertFalse(frappe.db.exists("Note", {"title": _LEFTOVER_NOTE_TITLE}))
+		out = mcp.dispatch(
+			{
+				"jsonrpc": "2.0",
+				"id": 13,
+				"method": "tools/call",
+				"params": {"name": "_test_inserts_then_raises", "arguments": {}},
+			}
+		)
+		self.assertTrue(out["result"]["isError"])
+		# The insert genuinely ran (this isn't just "never wrote") -- the
+		# regression this guards against is the write surviving despite the
+		# error response, not the tool failing to attempt it at all.
+		self.assertFalse(frappe.db.exists("Note", {"title": _LEFTOVER_NOTE_TITLE}))
+
+	# -- IMPORTANT 6: ToolError branch must also clear frappe.local.message_log --
+
+	def test_tool_error_branch_clears_message_log(self):
+		out = mcp.dispatch(
+			{
+				"jsonrpc": "2.0",
+				"id": 14,
+				"method": "tools/call",
+				"params": {"name": "_test_msgprints_then_raises_tool_error", "arguments": {}},
+			}
+		)
+		text = out["result"]["content"][0]["text"]
+		self.assertTrue(out["result"]["isError"])
+		self.assertEqual(text, "clean tool error message")
+		self.assertNotIn("leaky detail", text)
+		self.assertEqual(frappe.local.message_log, [])
+
+
+class TestMCPRoleGate(IntegrationTestCase):
+	"""IMPORTANT 4: the MCP endpoint itself must refuse an unauthorized session,
+	not merely rely on individual tools surviving on Frappe's own document
+	permissions -- get_company_context in particular doesn't (it reads via
+	frappe.db.get_value/frappe.get_all/frappe.db.count, all permission-free).
+	"""
+
+	def setUp(self):
+		doc = frappe.get_single("AI Settings")
+		doc.enabled = 1
+		doc.paperclip_url = "https://paperclip.example.com"
+		doc.paperclip_company_id = "c-1"
+		doc.agent_id = "a-1"
+		doc.board_api_key = "secret"
+		doc.erpnext_company = frappe.db.get_value("Company", {}, "name")
+		doc.allowed_roles = '["System Manager"]'
+		doc.save()
+
+		self.user_email = "ai-role-gate-lowpriv@example.com"
+		if not frappe.db.exists("User", self.user_email):
+			frappe.get_doc(
+				{
+					"doctype": "User",
+					"email": self.user_email,
+					"first_name": "AI Role Gate Low Priv",
+					"send_welcome_email": 0,
+					"roles": [{"role": "Sales User"}],
+				}
+			).insert(ignore_permissions=True)
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.db.rollback()
+
+	def test_low_priv_user_is_refused_at_the_transport_before_any_tool_runs(self):
+		frappe.set_user(self.user_email)
+		out = mcp.dispatch(
+			{
+				"jsonrpc": "2.0",
+				"id": 1,
+				"method": "tools/call",
+				"params": {"name": "get_company_context", "arguments": {}},
+			}
+		)
+		# A protocol-level refusal (top-level "error"), not a tool result --
+		# proves this is the transport gate in _route(), not get_company_context
+		# itself failing on some other check.
+		self.assertNotIn("result", out)
+		self.assertEqual(out["error"]["code"], mcp.AI_FORBIDDEN)
+
+	def test_low_priv_user_is_refused_even_for_tools_list(self):
+		# The gate runs before the method dispatch entirely, so it must hold
+		# for every method, not just tools/call.
+		frappe.set_user(self.user_email)
+		out = mcp.dispatch({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+		self.assertNotIn("result", out)
+		self.assertEqual(out["error"]["code"], mcp.AI_FORBIDDEN)
+
+	def test_allowed_role_still_reaches_the_tool(self):
+		# Regression guard for the gate itself: Administrator carries System
+		# Manager, so it must still get through to a real tool result.
+		out = mcp.dispatch(
+			{
+				"jsonrpc": "2.0",
+				"id": 3,
+				"method": "tools/call",
+				"params": {"name": "get_company_context", "arguments": {}},
+			}
+		)
+		self.assertIn("result", out)
 		self.assertFalse(out["result"].get("isError", False))

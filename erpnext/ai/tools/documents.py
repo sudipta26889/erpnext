@@ -51,6 +51,15 @@ def search_documents(
 
 	if not frappe.db.exists("DocType", doctype):
 		raise ToolError(_("No such doctype: {0}").format(doctype))
+	if not frappe.has_permission(doctype, "read"):
+		# Same message as the nonexistent-doctype branch above, deliberately:
+		# frappe.get_list() below would otherwise raise its own distinguishable
+		# frappe.PermissionError for an existing-but-unreadable doctype, which
+		# mcp.py's tools/call handler collapses into a *different* uniform
+		# "Not permitted..." message than the ToolError branch echoes verbatim
+		# -- letting a caller enumerate hidden custom doctypes by name. Mirrors
+		# describe_doctype's identical pattern.
+		raise ToolError(_("No such doctype: {0}").format(doctype))
 
 	scoped_filters = scoping.scope_filters(doctype, filters)
 	if doctype == "Company":
@@ -385,6 +394,13 @@ def create_document(doctype: str, data: dict, idempotency_key: str) -> dict:
 		return {**existing, "reused": True}
 
 	if not frappe.db.exists("DocType", doctype):
+		raise ToolError(_("No such doctype: {0}").format(doctype))
+	if not frappe.has_permission(doctype, "create"):
+		# Same message as the nonexistent-doctype branch above, deliberately
+		# -- see search_documents' identical pattern above. Checked before
+		# frappe.get_doc(payload).insert() below gets a chance to raise its
+		# own distinguishable frappe.PermissionError for an existing-but-
+		# uncreatable doctype.
 		raise ToolError(_("No such doctype: {0}").format(doctype))
 
 	payload = dict(data or {})

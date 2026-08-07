@@ -89,6 +89,39 @@ def assert_doctype_scopable(doctype: str) -> None:
 # `max_document_value`, `allowed_methods`, `enabled_tools` and `allowed_roles`
 # -- the agent must never be able to widen its own caps or allowlists by
 # editing the document that defines them.
+#
+# Two further families, added after a pre-merge review found the first two
+# didn't cover everything a free-tier write can reach:
+#
+#  - Scheduler-armed privileged effects: a free-tier create_document/
+#    update_document call can set a field that only fires a privileged effect
+#    later, off a scheduled job, with no gated tool name anywhere in that
+#    later path and nobody in the loop when it actually happens --
+#    Subscription.submit_invoice (hooks.py's daily process_subscription job
+#    submits the resulting Sales Invoice, GL postings, indefinitely), Stock
+#    Settings.auto_indent + reorder levels (daily stock/reorder_item.py
+#    submits Material Requests), Auto Repeat.submit_on_creation (frappe's
+#    daily auto-repeat job), Process Statement Of Accounts.enable_auto_email
+#    and Email Campaign (scheduled mass email to real customers/leads, as the
+#    company). Subscription carries a `company` field (passes
+#    assert_scopable) and submit_invoice reads as ordinary business data
+#    (passes _assert_no_forbidden_keys) -- nothing else in this module would
+#    have caught it.
+#  - Permission-granting and global-config doctypes: company-less, so they
+#    pass assert_scopable() unchallenged on a single-company site, and
+#    writable via update_document. Accounts Settings alone exposes
+#    acc_frozen_upto, frozen_accounts_modifier, over_billing_allowance and
+#    credit_controller; System Settings includes time_zone -- the field that
+#    has taken this site down twice (see
+#    patches/v16_0/normalize_deprecated_timezone.py).
+#
+# NOTE (structural limitation, not fixed here): this whole list is the wrong
+# shape. The invariant this feature depends on is "no privileged effect
+# without a gated tool name" -- a property of what a doctype's controller and
+# the scheduler do with a field, not of the doctype's name. A denylist can
+# only ever enumerate doctypes someone has already thought to check; the
+# correct fix is an allowlist of business doctypes vetted for write access.
+# See docs/superpowers/specs/2026-08-06-erpnext-ai-roadmap.md for the writeup.
 WRITE_FORBIDDEN_DOCTYPES: frozenset[str] = frozenset(
 	{
 		"User",
@@ -106,6 +139,23 @@ WRITE_FORBIDDEN_DOCTYPES: frozenset[str] = frozenset(
 		"Webhook",
 		"Scheduled Job Type",
 		"AI Settings",
+		# Scheduler-armed privileged effects.
+		"Subscription",
+		"Auto Repeat",
+		"Process Statement Of Accounts",
+		"Email Campaign",
+		"Notification",
+		"Auto Email Report",
+		# Permission-granting and global-config doctypes.
+		"User Permission",
+		"DocShare",
+		"Custom Role",
+		"Role Permission for Page and Report",
+		"System Settings",
+		"Accounts Settings",
+		"Stock Settings",
+		"Buying Settings",
+		"Selling Settings",
 	}
 )
 
