@@ -384,6 +384,45 @@ class TestMCPPermissionBoundary(IntegrationTestCase):
 		self.assertEqual(text, frappe._("No such doctype: {0}").format("GL Entry"))
 		self.assertNotIn("rows", text.lower())
 
+		# CRITICAL 1 regression guard: asserting the exact string above is not
+		# enough by itself -- a previous wave hoisted this ToolError check
+		# *after* scoping.assert_scopable(), which raises
+		# frappe.DoesNotExistError (a *different*, uniform-collapsed "Not
+		# permitted..." message -- see mcp._route's
+		# (frappe.PermissionError, frappe.DoesNotExistError) branch) for a
+		# genuinely nonexistent doctype before ever reaching it. That inverted
+		# the invariant apart: the unpermitted-but-existing case hit this
+		# exact ToolError string while the nonexistent case never did, so
+		# seeing "No such doctype: X" echoed verbatim positively confirmed X
+		# exists. The message template interpolates the caller's own input
+		# (matching describe_doctype's identical, pre-existing pattern in
+		# test_discovery.py), so a nonexistent doctype's text can never be
+		# byte-for-byte equal to GL Entry's -- different names format
+		# differently by construction. What must be proved instead is that
+		# the *same* "No such doctype: {0}" template -- the ToolError branch,
+		# not the DoesNotExistError-collapsing one -- fires for a nonexistent
+		# doctype too, exactly as it does for GL Entry above. mcp.dispatch's
+		# ToolError branch rolls back the whole transaction (not scoped to a
+		# savepoint), undoing setUp()'s never-committed AI Settings save, so
+		# the low-priv user must be re-admitted before the second call.
+		self._readmit_low_priv_user_after_rollback()
+		nonexistent = mcp.dispatch(
+			{
+				"jsonrpc": "2.0",
+				"id": 2,
+				"method": "tools/call",
+				"params": {
+					"name": "search_documents",
+					"arguments": {"doctype": "No Such Doctype At All"},
+				},
+			}
+		)
+		self.assertTrue(nonexistent["result"]["isError"])
+		self.assertEqual(
+			nonexistent["result"]["content"][0]["text"],
+			frappe._("No such doctype: {0}").format("No Such Doctype At All"),
+		)
+
 	def test_get_document_same_message_for_missing_and_unreadable_record(self):
 		from erpnext.ai import mcp
 

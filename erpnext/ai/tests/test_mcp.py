@@ -22,11 +22,17 @@ _THROWAWAY_TOOL_NAMES = [
 	"_test_throws_unexpected",
 	"_test_inserts_then_raises",
 	"_test_msgprints_then_raises_tool_error",
+	"_test_inserts_then_raises_tool_error",
+	"_test_inserts_then_raises_validation_error",
 ]
 
 # A stable marker so tests can assert on presence/absence without depending on
 # autoname/creation order.
 _LEFTOVER_NOTE_TITLE = "_test_inserts_then_raises leftover"
+# MINOR 6: separate markers for the ToolError/ValidationError rollback tests
+# below, so all three can run without colliding on the same Note title.
+_LEFTOVER_NOTE_TITLE_TOOL_ERROR = "_test_inserts_then_raises_tool_error leftover"
+_LEFTOVER_NOTE_TITLE_VALIDATION_ERROR = "_test_inserts_then_raises_validation_error leftover"
 
 
 @registry.tool(
@@ -118,6 +124,35 @@ def _msgprint_then_raise_tool_error():
 	# _server_messages next to the sanitized ToolError text.
 	frappe.msgprint("leaky detail naming another record")
 	raise registry.ToolError("clean tool error message")
+
+
+@registry.tool(
+	name="_test_inserts_then_raises_tool_error",
+	description="Test-only tool that inserts a document and then raises ToolError.",
+	input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+)
+def _insert_then_raise_tool_error():
+	# MINOR 6 regression guard: only the generic `except Exception` branch had
+	# a rollback test (_test_inserts_then_raises above) -- the ToolError
+	# branch needs the same guarantee, and its realistic path is exactly this
+	# shape: documents.create_document's value cap fires *after* doc.insert()
+	# has already run, so a real write always precedes the raise.
+	frappe.get_doc({"doctype": "Note", "title": _LEFTOVER_NOTE_TITLE_TOOL_ERROR}).insert()
+	raise registry.ToolError("boom after insert (ToolError)")
+
+
+@registry.tool(
+	name="_test_inserts_then_raises_validation_error",
+	description="Test-only tool that inserts a document and then raises frappe.ValidationError.",
+	input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+)
+def _insert_then_raise_validation_error():
+	# MINOR 6 regression guard, ValidationError's counterpart of the ToolError
+	# test above -- ordinary business validation (e.g. AccountsController.
+	# validate()) can just as easily fire after a child row or an earlier
+	# document in the same call already wrote.
+	frappe.get_doc({"doctype": "Note", "title": _LEFTOVER_NOTE_TITLE_VALIDATION_ERROR}).insert()
+	frappe.throw(frappe._("boom after insert (ValidationError)"))
 
 
 class TestMCP(IntegrationTestCase):
@@ -399,6 +434,43 @@ class TestMCP(IntegrationTestCase):
 		# error response, not the tool failing to attempt it at all.
 		self.assertFalse(frappe.db.exists("Note", {"title": _LEFTOVER_NOTE_TITLE}))
 
+	def test_failed_tool_call_rolls_back_partial_writes_on_tool_error(self):
+		# MINOR 6: the generic Exception branch above was the only one with a
+		# rollback regression test -- the ToolError branch needs the same
+		# guarantee. Its realistic path is documents.create_document's value
+		# cap firing after doc.insert() has already run (see
+		# test_write_tools.py's
+		# test_create_document_enforces_value_cap_on_the_settled_journal_entry
+		# for that exact scenario at the tool-function level); this is the
+		# same shape exercised through the transport.
+		self.assertFalse(frappe.db.exists("Note", {"title": _LEFTOVER_NOTE_TITLE_TOOL_ERROR}))
+		out = mcp.dispatch(
+			{
+				"jsonrpc": "2.0",
+				"id": 15,
+				"method": "tools/call",
+				"params": {"name": "_test_inserts_then_raises_tool_error", "arguments": {}},
+			}
+		)
+		self.assertTrue(out["result"]["isError"])
+		self.assertFalse(frappe.db.exists("Note", {"title": _LEFTOVER_NOTE_TITLE_TOOL_ERROR}))
+
+	def test_failed_tool_call_rolls_back_partial_writes_on_validation_error(self):
+		# MINOR 6: ValidationError's counterpart of the two rollback tests
+		# above -- business validation (e.g. AccountsController.validate())
+		# can just as easily fire after an earlier write in the same call.
+		self.assertFalse(frappe.db.exists("Note", {"title": _LEFTOVER_NOTE_TITLE_VALIDATION_ERROR}))
+		out = mcp.dispatch(
+			{
+				"jsonrpc": "2.0",
+				"id": 16,
+				"method": "tools/call",
+				"params": {"name": "_test_inserts_then_raises_validation_error", "arguments": {}},
+			}
+		)
+		self.assertTrue(out["result"]["isError"])
+		self.assertFalse(frappe.db.exists("Note", {"title": _LEFTOVER_NOTE_TITLE_VALIDATION_ERROR}))
+
 	# -- IMPORTANT 6: ToolError branch must also clear frappe.local.message_log --
 
 	def test_tool_error_branch_clears_message_log(self):
@@ -466,6 +538,22 @@ class TestMCPRoleGate(IntegrationTestCase):
 		# itself failing on some other check.
 		self.assertNotIn("result", out)
 		self.assertEqual(out["error"]["code"], mcp.AI_FORBIDDEN)
+
+	def test_low_priv_user_is_refused_with_message_log_cleared(self):
+		# MINOR 6: paperclip.assert_ai_user() raises via frappe.throw(), which
+		# appends its message to frappe.local.message_log before raising --
+		# every other refusal branch in this module scrubs it before
+		# returning; this is the one that previously didn't.
+		frappe.set_user(self.user_email)
+		mcp.dispatch(
+			{
+				"jsonrpc": "2.0",
+				"id": 1,
+				"method": "tools/call",
+				"params": {"name": "get_company_context", "arguments": {}},
+			}
+		)
+		self.assertEqual(frappe.local.message_log, [])
 
 	def test_low_priv_user_is_refused_even_for_tools_list(self):
 		# The gate runs before the method dispatch entirely, so it must hold

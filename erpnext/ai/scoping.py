@@ -114,6 +114,17 @@ def assert_doctype_scopable(doctype: str) -> None:
 #    credit_controller; System Settings includes time_zone -- the field that
 #    has taken this site down twice (see
 #    patches/v16_0/normalize_deprecated_timezone.py).
+#  - More free-tier writes with scheduler blast radius, same two families as
+#    above: Email Account's enable_outgoing + default_outgoing route ALL
+#    site email (including password resets) through an operator-chosen SMTP
+#    host, flushed by the scheduler, and enable_incoming + append_to
+#    auto-create documents from polled mail every 10 minutes. Log Settings'
+#    retention values drive the daily run_log_clean_up purge -- the Error
+#    Log is where every sanitized MCP refusal and deferred traceback in this
+#    feature lands, so this is its forensic trail. Security Settings and
+#    Email Digest are the same global-config / scheduled-email family
+#    (Email Digest mails income, expenses, bank balance, receivables and
+#    payables daily).
 #
 # NOTE (structural limitation, not fixed here): this whole list is the wrong
 # shape. The invariant this feature depends on is "no privileged effect
@@ -156,6 +167,11 @@ WRITE_FORBIDDEN_DOCTYPES: frozenset[str] = frozenset(
 		"Stock Settings",
 		"Buying Settings",
 		"Selling Settings",
+		# More free-tier writes with scheduler blast radius.
+		"Email Account",
+		"Log Settings",
+		"Security Settings",
+		"Email Digest",
 	}
 )
 

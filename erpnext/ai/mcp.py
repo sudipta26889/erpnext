@@ -140,6 +140,14 @@ def _route(request_id: Any, method: str, params: dict) -> dict:
 	try:
 		paperclip.assert_ai_user()
 	except frappe.PermissionError as exc:
+		# MINOR 6: paperclip.assert_ai_user() raises via frappe.throw(), which
+		# appends the same message to frappe.local.message_log before raising
+		# -- as_json() would otherwise also copy it into the response as
+		# _server_messages/messages alongside the error object below. Nothing
+		# new leaks today (str(exc) already carries the identical text), but
+		# every other refusal path in this module scrubs message_log before
+		# returning; this is the one that didn't.
+		frappe.clear_messages()
 		return _error(request_id, AI_FORBIDDEN, str(exc))
 
 	if not registry.settings().enabled:

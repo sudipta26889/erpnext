@@ -47,8 +47,22 @@ def search_documents(
 	# (Version, Deleted Document, ...) carry no `company` field but can still
 	# expose the contents of documents belonging to any company.
 	scoping.assert_doctype_scopable(doctype)
-	scoping.assert_scopable(doctype)
 
+	# CRITICAL 1: this pair must run -- and raise its uniform ToolError --
+	# *before* assert_scopable() below, not after. assert_scopable() ->
+	# has_company_field() -> frappe.get_meta() raises frappe.DoesNotExistError
+	# for a doctype that doesn't exist at all, which mcp.py's tools/call
+	# handler collapses into "Not permitted for the current ERPNext user."
+	# (its (frappe.PermissionError, frappe.DoesNotExistError) branch) -- a
+	# *different* uniform message than the ToolError branch, which echoes
+	# str(exc) verbatim. If this exists+permission check ran after
+	# assert_scopable, the nonexistent-doctype case would never reach it (it
+	# never gets past assert_scopable), so only the exists-but-unpermitted
+	# case would raise this ToolError -- inverting the two cases apart
+	# instead of collapsing them together, and "No such doctype: X" echoed
+	# verbatim would then positively confirm X exists. Placing it first means
+	# both cases hit this exact ToolError with this exact text, so both
+	# collapse into the same verbatim-echoed message.
 	if not frappe.db.exists("DocType", doctype):
 		raise ToolError(_("No such doctype: {0}").format(doctype))
 	if not frappe.has_permission(doctype, "read"):
@@ -60,6 +74,8 @@ def search_documents(
 		# -- letting a caller enumerate hidden custom doctypes by name. Mirrors
 		# describe_doctype's identical pattern.
 		raise ToolError(_("No such doctype: {0}").format(doctype))
+
+	scoping.assert_scopable(doctype)
 
 	scoped_filters = scoping.scope_filters(doctype, filters)
 	if doctype == "Company":
@@ -257,6 +273,46 @@ def _assert_no_forbidden_keys(data: dict) -> None:
 		)
 
 
+# CRITICAL 2: doctype -> fieldnames that, if set through the free-tier
+# create_document/update_document, arm a privileged effect later off the
+# scheduler with no gated tool name anywhere in that later path.
+# `_assert_no_forbidden_keys` above only inspects *top-level* keys, so it
+# does not catch a forbidden field set through a *child table* -- setting one
+# of these is exactly that: routed through the parent document's payload as a
+# nested list, never a top-level key of its own.
+#
+#  - Item.reorder_levels (the "Item Reorder" child table): read by
+#    stock/reorder_item.py's daily `reorder_item` scheduled job, which builds
+#    and submits (`mr.submit()`) a Material Request per warehouse/item whose
+#    projected qty has dropped to `warehouse_reorder_level`. Item itself is
+#    not in WRITE_FORBIDDEN_DOCTYPES (it has no `company` field, so it also
+#    passes assert_scopable unchallenged), so nothing else in this module
+#    catches a call that only ever touches the Item, never the Material
+#    Request the scheduler builds off it later -- and max_document_value is
+#    never consulted either, since the cap only ever runs against a document
+#    this tool surface itself inserts/saves/submits.
+FIELD_FORBIDDEN_KEYS: dict[str, frozenset[str]] = {
+	"Item": frozenset({"reorder_levels"}),
+}
+
+
+def _assert_no_forbidden_fields(doctype: str, data: dict) -> None:
+	"""Reject a caller key that sets a forbidden field on `doctype` -- the
+	child-table counterpart of `_assert_no_forbidden_keys` above.
+	"""
+	forbidden = FIELD_FORBIDDEN_KEYS.get(doctype)
+	if not forbidden:
+		return
+	offending = sorted(set(data) & forbidden)
+	if offending:
+		raise ToolError(
+			_(
+				"These fields cannot be set on {0} through this tool: {1}. They arm scheduled "
+				"automation with no gated tool name anywhere in that path."
+			).format(doctype, ", ".join(offending))
+		)
+
+
 _VALUE_CAP_SAVEPOINT = "ai_cap"
 
 
@@ -386,13 +442,15 @@ def _load_for_write(doctype: str, name: str, ptype: str):
 	},
 )
 def create_document(doctype: str, data: dict, idempotency_key: str) -> dict:
-	_assert_writable_doctype(doctype)
-	_assert_no_forbidden_keys(data or {})
-
-	existing = _recall_idempotency(idempotency_key, doctype)
-	if existing:
-		return {**existing, "reused": True}
-
+	# CRITICAL 1: this pair must run -- and raise its uniform ToolError --
+	# *before* _assert_writable_doctype(doctype) below, which calls
+	# scoping.assert_scopable() -> has_company_field() -> frappe.get_meta(),
+	# raising frappe.DoesNotExistError for a doctype that doesn't exist at
+	# all. See search_documents' identical comment above: running this check
+	# after assert_scopable would mean only the exists-but-uncreatable case
+	# ever reaches it, inverting the two cases apart (a distinguishable
+	# "No such doctype: X" echoed verbatim by mcp.py would then positively
+	# confirm X exists) instead of collapsing both into the same message.
 	if not frappe.db.exists("DocType", doctype):
 		raise ToolError(_("No such doctype: {0}").format(doctype))
 	if not frappe.has_permission(doctype, "create"):
@@ -402,6 +460,14 @@ def create_document(doctype: str, data: dict, idempotency_key: str) -> dict:
 		# own distinguishable frappe.PermissionError for an existing-but-
 		# uncreatable doctype.
 		raise ToolError(_("No such doctype: {0}").format(doctype))
+
+	_assert_writable_doctype(doctype)
+	_assert_no_forbidden_keys(data or {})
+	_assert_no_forbidden_fields(doctype, data or {})
+
+	existing = _recall_idempotency(idempotency_key, doctype)
+	if existing:
+		return {**existing, "reused": True}
 
 	payload = dict(data or {})
 	payload["doctype"] = doctype
@@ -453,6 +519,7 @@ def update_document(doctype: str, name: str, data: dict) -> dict:
 			_("{0} {1} is submitted or cancelled; it cannot be edited directly.").format(doctype, name)
 		)
 	_assert_no_forbidden_keys(data or {})
+	_assert_no_forbidden_fields(doctype, data or {})
 
 	for key, value in (data or {}).items():
 		if key == "company":

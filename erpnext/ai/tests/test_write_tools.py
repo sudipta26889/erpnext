@@ -168,6 +168,47 @@ class TestWriteTools(IntegrationTestCase):
 				with self.assertRaises(registry.ToolError):
 					documents.create_document(doctype, {}, idempotency_key=f"k-permission-global-{doctype}")
 
+	def test_create_document_rejects_more_scheduler_blast_radius_doctypes(self):
+		# IMPORTANT 3: Email Account routes site email (including password
+		# resets) through an operator-chosen SMTP host and auto-creates
+		# documents from polled mail; Log Settings' retention drives the
+		# daily purge that would otherwise erase this feature's own forensic
+		# trail (every sanitized MCP refusal lands in the Error Log); Security
+		# Settings and Email Digest are the same global-config /
+		# scheduled-email family as the doctypes above.
+		for doctype in ("Email Account", "Log Settings", "Security Settings", "Email Digest"):
+			with self.subTest(doctype=doctype):
+				with self.assertRaises(registry.ToolError):
+					documents.create_document(doctype, {}, idempotency_key=f"k-scheduler-blast-{doctype}")
+
+	def test_create_document_rejects_item_reorder_levels(self):
+		# CRITICAL 2: Item.reorder_levels (the "Item Reorder" child table) is
+		# read by stock/reorder_item.py's daily scheduled job, which ends in
+		# mr.submit() for whatever Purchase/Transfer/... Material Request it
+		# builds off these rows -- no gated tool name anywhere in that later
+		# path, no human in the loop, and Item has no `company` field so it
+		# also passes assert_scopable unchallenged. _assert_no_forbidden_keys
+		# alone doesn't catch this: reorder_levels is a child table, not a
+		# top-level bookkeeping key.
+		with self.assertRaises(registry.ToolError):
+			documents.create_document(
+				"Item",
+				{
+					"item_code": "AI Reorder Bypass Item",
+					"reorder_levels": [
+						{
+							"warehouse": "Nonexistent Warehouse",
+							"warehouse_reorder_level": 10,
+							"warehouse_reorder_qty": 10,
+							"material_request_type": "Purchase",
+						}
+					],
+				},
+				idempotency_key="k-item-reorder-bypass",
+			)
+		# Rejected outright, before insert() ever runs -- nothing created.
+		self.assertFalse(frappe.db.exists("Item", "AI Reorder Bypass Item"))
+
 	def test_create_document_denies_user_without_permission_same_as_unknown_doctype(self):
 		# IMPORTANT 5: mirrors search_documents' identical pattern
 		# (test_read_tools.py) and describe_doctype's original
@@ -240,6 +281,53 @@ class TestWriteTools(IntegrationTestCase):
 		# gets touched.
 		with self.assertRaises(registry.ToolError):
 			documents.update_document("User", "Administrator", {"roles": [{"role": "System Manager"}]})
+
+	def test_update_document_rejects_item_reorder_levels(self):
+		# CRITICAL 2: update_document's counterpart of
+		# test_create_document_rejects_item_reorder_levels above -- setting
+		# reorder_levels on an *existing* Item must be refused the same way.
+		# This trimmed test site carries no Item Group / UOM fixtures at all,
+		# so both are created here, mirroring _make_second_company's
+		# throwaway-fixture-if-missing pattern above; the whole insert is
+		# rolled back in tearDown.
+		if not frappe.db.exists("Item Group", "All Item Groups"):
+			frappe.get_doc(
+				{"doctype": "Item Group", "item_group_name": "All Item Groups", "is_group": 1}
+			).insert(ignore_permissions=True)
+		if not frappe.db.exists("UOM", "Nos"):
+			frappe.get_doc({"doctype": "UOM", "uom_name": "Nos"}).insert(ignore_permissions=True)
+
+		item = frappe.get_doc(
+			{
+				"doctype": "Item",
+				"item_code": "AI Reorder Update Bypass Item",
+				"item_group": "All Item Groups",
+				"stock_uom": "Nos",
+				# india_compliance requires a GST HSN Code for sales items on an
+				# India company -- irrelevant to what this test checks, so opt
+				# this fixture out rather than fabricate a real HSN code.
+				"is_sales_item": 0,
+			}
+		)
+		item.insert(ignore_permissions=True)
+
+		with self.assertRaises(registry.ToolError):
+			documents.update_document(
+				"Item",
+				item.name,
+				{
+					"reorder_levels": [
+						{
+							"warehouse": "Nonexistent Warehouse",
+							"warehouse_reorder_level": 10,
+							"warehouse_reorder_qty": 10,
+							"material_request_type": "Purchase",
+						}
+					]
+				},
+			)
+		item.reload()
+		self.assertEqual(len(item.reorder_levels or []), 0)
 
 	# -- delete_document ------------------------------------------------
 
@@ -512,64 +600,133 @@ class TestMCPWriteToolsPermissionBoundary(IntegrationTestCase):
 		doc.save()
 		frappe.set_user(self.user_email)
 
+	def test_create_document_nonexistent_and_unpermitted_doctype_give_the_same_message(self):
+		# CRITICAL 1 regression guard, create_document's counterpart of
+		# test_low_privilege_user_is_denied_through_tools_call in
+		# test_read_tools.py: a doctype that doesn't exist and one (GL Entry)
+		# that exists but this low-priv user cannot create must be refused
+		# through the *same* ToolError template, not distinguishably --
+		# before the fix, the exists+has_permission check ran after
+		# scoping.assert_scopable(), which raises frappe.DoesNotExistError (a
+		# different, uniform-collapsed "Not permitted..." message) for the
+		# nonexistent case before ever reaching it, so only the
+		# exists-but-uncreatable case hit this ToolError's text, positively
+		# confirming GL Entry exists. The template interpolates the caller's
+		# own input doctype name (matching describe_doctype's pre-existing
+		# pattern), so a nonexistent name's text is never byte-for-byte equal
+		# to GL Entry's -- what must be proved is that the same
+		# "No such doctype: {0}" template fires for both, verified below
+		# against each call's own expected text rather than against each
+		# other.
+		from erpnext.ai import mcp
+
+		frappe.set_user(self.user_email)
+		unpermitted = mcp.dispatch(
+			{
+				"jsonrpc": "2.0",
+				"id": 1,
+				"method": "tools/call",
+				"params": {
+					"name": "create_document",
+					"arguments": {
+						"doctype": "GL Entry",
+						"data": {},
+						"idempotency_key": "k-mcp-create-unpermitted",
+					},
+				},
+			}
+		)
+		self.assertTrue(unpermitted["result"]["isError"])
+		self.assertEqual(
+			unpermitted["result"]["content"][0]["text"], frappe._("No such doctype: {0}").format("GL Entry")
+		)
+
+		# dispatch()'s ToolError branch also rolls back the whole
+		# transaction, undoing setUp()'s never-committed AI Settings save.
+		self._readmit_low_priv_user_after_rollback()
+		nonexistent = mcp.dispatch(
+			{
+				"jsonrpc": "2.0",
+				"id": 2,
+				"method": "tools/call",
+				"params": {
+					"name": "create_document",
+					"arguments": {
+						"doctype": "No Such Doctype At All",
+						"data": {},
+						"idempotency_key": "k-mcp-create-nonexistent",
+					},
+				},
+			}
+		)
+		self.assertTrue(nonexistent["result"]["isError"])
+		self.assertEqual(
+			nonexistent["result"]["content"][0]["text"],
+			frappe._("No such doctype: {0}").format("No Such Doctype At All"),
+		)
+
 	def test_missing_and_unwritable_document_give_the_same_message(self):
 		from erpnext.ai import mcp
 
 		# Sales User (self.user_email's only role) has no permission at all on
 		# Note, so this is a genuinely existing-but-unwritable record, not
 		# just another "doesn't exist" case in disguise.
+		#
+		# IMPORTANT 4: deliberately NOT committed. A stray frappe.db.commit()
+		# here previously made setUp()'s AI Settings save durable too --
+		# enabled=1, board_api_key, erpnext_company, and allowed_roles
+		# admitting Sales User -- since a commit makes *everything* pending
+		# on the connection durable, not just this record. tearDown()'s
+		# rollback cannot undo a commit, and the old `finally` block only
+		# cleaned up the Note, so the shared test.localhost site permanently
+		# had the AI surface enabled with Sales User admitted for every later
+		# module and every later run -- exactly the value the role gate
+		# (test_low_priv_user_is_refused_at_the_transport_before_any_tool_runs
+		# etc.) is tested against. No commit is needed here: the dispatch()
+		# call below sees this row just fine (visible to later statements on
+		# the same uncommitted connection/transaction), and its own
+		# frappe.db.rollback() cleans it up automatically -- no explicit
+		# delete, no "still exists" sanity check, nothing left behind.
 		note = frappe.get_doc({"doctype": "Note", "title": "write-boundary"})
 		note.insert(ignore_permissions=True)
-		# CRITICAL 2: both dispatch() calls below land in a branch that now
-		# calls frappe.db.rollback() -- a *full* rollback, not scoped to a
-		# savepoint, so it would otherwise also undo this uncommitted insert,
-		# making the "note still exists" sanity check below meaningless (it
-		# would report "gone" regardless of whether delete_document actually
-		# ran). Committing here mirrors production, where this record would
-		# already be durable from an earlier, separate request; the finally
-		# block below cleans it up explicitly since a plain rollback can no
-		# longer do it for this one record.
-		frappe.db.commit()
-		try:
-			frappe.set_user(self.user_email)
-			unwritable = mcp.dispatch(
-				{
-					"jsonrpc": "2.0",
-					"id": 1,
-					"method": "tools/call",
-					"params": {
-						"name": "delete_document",
-						"arguments": {"doctype": "Note", "name": note.name},
-					},
-				}
-			)
 
-			self._readmit_low_priv_user_after_rollback()
-			missing = mcp.dispatch(
-				{
-					"jsonrpc": "2.0",
-					"id": 2,
-					"method": "tools/call",
-					"params": {
-						"name": "delete_document",
-						"arguments": {"doctype": "Note", "name": "NOTE-DOES-NOT-EXIST"},
-					},
-				}
-			)
+		frappe.set_user(self.user_email)
+		unwritable = mcp.dispatch(
+			{
+				"jsonrpc": "2.0",
+				"id": 1,
+				"method": "tools/call",
+				"params": {
+					"name": "delete_document",
+					"arguments": {"doctype": "Note", "name": note.name},
+				},
+			}
+		)
 
-			missing_text = missing["result"]["content"][0]["text"]
-			unwritable_text = unwritable["result"]["content"][0]["text"]
-			self.assertTrue(missing["result"]["isError"])
-			self.assertTrue(unwritable["result"]["isError"])
-			self.assertEqual(missing_text, unwritable_text)
-			self.assertEqual(missing_text, frappe._("Not permitted for the current ERPNext user."))
+		# Still required even with the commit gone: dispatch()'s own
+		# PermissionError branch just rolled back the whole transaction
+		# (not scoped to a savepoint), which undoes setUp()'s never-committed
+		# AI Settings save just as much as it undoes the Note above -- without
+		# this, the second dispatch() call below would fail the transport-
+		# level role gate (or the `enabled` check) instead of reaching
+		# delete_document at all, returning a JSON-RPC `error` object with no
+		# `result` key rather than a comparable refusal text.
+		self._readmit_low_priv_user_after_rollback()
+		missing = mcp.dispatch(
+			{
+				"jsonrpc": "2.0",
+				"id": 2,
+				"method": "tools/call",
+				"params": {
+					"name": "delete_document",
+					"arguments": {"doctype": "Note", "name": "NOTE-DOES-NOT-EXIST"},
+				},
+			}
+		)
 
-			# Sanity check: the document must still exist -- proves the
-			# "unwritable" branch was a genuine denial, not a delete that
-			# silently no-op'd.
-			frappe.set_user("Administrator")
-			self.assertTrue(frappe.db.exists("Note", note.name))
-		finally:
-			frappe.set_user("Administrator")
-			frappe.delete_doc("Note", note.name, force=True, ignore_permissions=True)
-			frappe.db.commit()
+		missing_text = missing["result"]["content"][0]["text"]
+		unwritable_text = unwritable["result"]["content"][0]["text"]
+		self.assertTrue(missing["result"]["isError"])
+		self.assertTrue(unwritable["result"]["isError"])
+		self.assertEqual(missing_text, unwritable_text)
+		self.assertEqual(missing_text, frappe._("Not permitted for the current ERPNext user."))

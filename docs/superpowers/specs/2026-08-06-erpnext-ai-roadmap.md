@@ -122,3 +122,13 @@ The invariant this whole feature depends on is: **no privileged effect without a
 **The correct fix is an allowlist**: a vetted list of business doctypes `create_document`/`update_document` may touch at all, each one checked (once, deliberately) for exactly this property — no field on it, in combination with any scheduler job or hook shipped by frappe or erpnext, can cause a submit/cancel/delete/mass-send effect without the call passing through a gated tool name. Anything not on that list is refused by construction, including doctypes nobody has thought about yet, which is the property a denylist can never have.
 
 **Not implemented now.** This section exists so the shape of the current fix is not mistaken for the real fix. The denylist added in this pass is a legitimate interim measure — it closes every concretely-identified hole — but it is not the invariant; it is a best-effort approximation of it that requires a human to keep finding the next hole.
+
+### Known open instances of the same invariant gap (field-level, not doctype-level)
+
+**Recorded 2026-08-07, during the pre-merge review fix wave that added `documents.FIELD_FORBIDDEN_KEYS`.**
+
+`WRITE_FORBIDDEN_DOCTYPES` above only stops the attack when the *whole doctype* is the problem. A second, narrower shape of the same gap exists where the doctype itself is ordinary business data (belongs on `create_document`/`update_document`) but one specific field on it arms a privileged scheduled effect — `_assert_no_forbidden_keys` doesn't catch these either, when the field lives inside a child table rather than as a top-level key. `documents.FIELD_FORBIDDEN_KEYS` is the interim, per-field denylist for this shape, with the same "not exhaustive" caveat as the doctype-level list above. Known live instances, so they are not merged silently:
+
+- **`Item.reorder_levels`** (the `Item Reorder` child table) — closed in this pass. Read by `erpnext/stock/reorder_item.py`'s daily `reorder_item` scheduled job, which ends in `mr.submit()` for whatever Purchase/Transfer/Material Issue/Manufacture Material Request it builds off each row's `warehouse_reorder_level`/`warehouse_reorder_qty`/`material_request_type`. `Item` has no `company` field (passes `assert_scopable` unchallenged) and is not itself in `WRITE_FORBIDDEN_DOCTYPES`, and `max_document_value` is never consulted because the cap only ever runs against a document this tool surface itself inserts/saves/submits — never the Material Request the scheduler builds later, off a different document, on its own schedule.
+
+No other instances of this specific (doctype allowed, one field arms the scheduler) shape have been vetted for yet — this list is a starting point, not a completed audit.

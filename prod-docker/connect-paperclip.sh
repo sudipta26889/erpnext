@@ -10,6 +10,14 @@
 # invoices, cancelled documents and deletions with no human in the loop, and nothing
 # will look wrong. That is a defect, not a shortcut. The caps in AI Settings exist
 # precisely because this invariant can be broken by configuration outside this repo.
+#
+# IMPORTANT: the ERPNEXT_API_KEY/SECRET below belong to an ERPNext user that must also
+# hold a role listed in AI Settings -> Allowed Roles (allowed_roles, a JSON list;
+# ships as ["System Manager"]). erpnext/ai/mcp.py's _route() calls
+# paperclip.assert_ai_user() before every method, including "initialize" -- a service
+# user without a listed role gets AI_FORBIDDEN on every call, not just writes. That
+# same allowed_roles list also gates the desk AI page for human users, so adding a
+# role here to admit this service user grants that role the desk AI tab too.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -76,6 +84,11 @@ frappe.db.commit()
 print("AI Settings saved for", frappe.local.site, "company", doc.erpnext_company)
 PYEOF
 
+echo
+echo "IMPORTANT: the ERPNext user behind ERPNEXT_API_KEY/SECRET must hold a role listed"
+echo "in AI Settings -> Allowed Roles (default: [\"System Manager\"]) or every MCP call,"
+echo "including initialize, will fail with AI_FORBIDDEN. That same list also gates the"
+echo "desk AI tab for human users -- admitting this service user's role admits it there too."
 echo
 echo "Next: create a tool policy in Paperclip requiring approval for"
 echo "  submit_document, cancel_document, delete_document, call_method"

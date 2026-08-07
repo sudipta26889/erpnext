@@ -57,7 +57,18 @@ That is fifteen tools in total across `discovery` (5), `documents` (7), `reports
    `prod-docker/.env.example` for the full key set).
 3. Create an ERPNext API key/secret for the AI service user. Export them for
    the next step only -- they are not stored in `.env` (see the comment in
-   `connect-paperclip.sh`).
+   `connect-paperclip.sh`). **That user must also hold a role listed in
+   AI Settings -> Allowed Roles** (`allowed_roles`, a JSON list) -- checked by
+   `paperclip.assert_ai_user()` at the top of every MCP call, including
+   `initialize`. The shipped default is `["System Manager"]`. A service user
+   created for least privilege (no System Manager role) gets `AI_FORBIDDEN`
+   on every call, including the handshake, with nothing else pointing at AI
+   Settings -- either grant the service user an already-listed role, or add
+   its role to `allowed_roles` first. `allowed_roles` is shared with the desk
+   `AI` page's own gate (`page/ai/ai.py::get_boot_info`), so admitting the
+   service account's role here also grants that role the desk AI tab for any
+   human user who holds it -- pick or add a role with that in mind, not just
+   "whatever the service user already has".
 4. `ERPNEXT_API_KEY=... ERPNEXT_API_SECRET=... ./prod-docker/connect-paperclip.sh`
 5. In Paperclip, bind the connection's catalogue to the CEO via a tool access
    profile, and add a tool policy requiring approval for `submit_document`,
