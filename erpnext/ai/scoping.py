@@ -69,6 +69,59 @@ def assert_doctype_scopable(doctype: str) -> None:
 		)
 
 
+# Doctypes that must never be created, changed or deleted through the write
+# tools, on any site -- company scoping is irrelevant here because the power
+# these carry has nothing to do with which company's books are touched. Most
+# have no `company` field at all, so they would otherwise sail through
+# `assert_scopable()` unchallenged on a single-company site.
+#
+# Two families:
+#  - Privilege escalation: User, Role, Role Profile, Custom DocPerm, DocPerm
+#    can grant the agent (or any account) more access than it was scoped to.
+#  - Code / behaviour injection: Property Setter, Server Script, Client
+#    Script, DocType, Custom Field, Workflow, Workflow Action, Webhook,
+#    Scheduled Job Type can change what code runs or how existing doctypes
+#    behave -- `call_method` is allowlist-only specifically to keep arbitrary
+#    code execution out of this tool surface; creating a Server Script
+#    through `create_document` would walk straight around that allowlist.
+#
+# `AI Settings` belongs here for a reason specific to this feature: it holds
+# `max_document_value`, `allowed_methods`, `enabled_tools` and `allowed_roles`
+# -- the agent must never be able to widen its own caps or allowlists by
+# editing the document that defines them.
+WRITE_FORBIDDEN_DOCTYPES: frozenset[str] = frozenset(
+	{
+		"User",
+		"Role",
+		"Role Profile",
+		"Custom DocPerm",
+		"DocPerm",
+		"Property Setter",
+		"Server Script",
+		"Client Script",
+		"DocType",
+		"Custom Field",
+		"Workflow",
+		"Workflow Action",
+		"Webhook",
+		"Scheduled Job Type",
+		"AI Settings",
+	}
+)
+
+
+def assert_write_allowed_doctype(doctype: str) -> None:
+	"""Raise if `doctype` is outright forbidden for create/update/delete.
+
+	Called by every write tool before any data access, alongside
+	`assert_doctype_scopable`/`assert_scopable` -- this is a separate guard
+	because the doctypes in `WRITE_FORBIDDEN_DOCTYPES` are refused regardless
+	of company scoping, not because they can't be scoped.
+	"""
+	if doctype in WRITE_FORBIDDEN_DOCTYPES:
+		raise ToolError(_("{0} cannot be created, changed or deleted through this agent.").format(doctype))
+
+
 def default_company() -> str:
 	company = registry.settings().erpnext_company
 	if not company:

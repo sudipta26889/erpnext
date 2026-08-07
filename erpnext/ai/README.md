@@ -44,17 +44,22 @@ can be broken by configuration outside this repository.
 | `workspace/ai/` | The `AI` workspace entry linking to the page |
 | `ai/` (repo root) | React source for the desk SPA; `vite build` outputs an IIFE bundle to `erpnext/public/ai/ai.bundle.js`, loaded into the desk page via `frappe.require` |
 
-That is fourteen tools in total across `discovery`, `documents`, `reports` and `methods`.
+That is fifteen tools in total across `discovery` (5), `documents` (7), `reports` (1), `methods` (1) and `ping` (registered directly in `registry.py`).
 
 ## Setup
 
-1. Fill `PAPERCLIP_*` and `ERPNEXT_MCP_URL` in `prod-docker/.env` (see
+1. Build the desk SPA: `yarn build:ai` (from the repo root). This installs
+   the `ai/` frontend's dependencies and runs `vite build`, which outputs
+   `erpnext/public/ai/ai.bundle.js` -- `public/ai` is gitignored, so a fresh
+   checkout has no bundle until this runs, and the desk page will otherwise
+   fail to load with "AI bundle failed to load".
+2. Fill `PAPERCLIP_*` and `ERPNEXT_MCP_URL` in `prod-docker/.env` (see
    `prod-docker/.env.example` for the full key set).
-2. Create an ERPNext API key/secret for the AI service user. Export them for
+3. Create an ERPNext API key/secret for the AI service user. Export them for
    the next step only -- they are not stored in `.env` (see the comment in
    `connect-paperclip.sh`).
-3. `ERPNEXT_API_KEY=... ERPNEXT_API_SECRET=... ./prod-docker/connect-paperclip.sh`
-4. In Paperclip, bind the connection's catalogue to the CEO via a tool access
+4. `ERPNEXT_API_KEY=... ERPNEXT_API_SECRET=... ./prod-docker/connect-paperclip.sh`
+5. In Paperclip, bind the connection's catalogue to the CEO via a tool access
    profile, and add a tool policy requiring approval for `submit_document`,
    `cancel_document`, `delete_document` and `call_method`.
 

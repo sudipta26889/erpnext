@@ -5,12 +5,38 @@ import { RunFeed } from './components/RunFeed';
 import { Thread } from './components/Thread';
 import type { ActionRequest, Thread as ThreadType } from './types';
 
+type Boot = { enabled: boolean; company: string; agent_id: string };
+
 export function App() {
+  const [boot, setBoot] = useState<Boot | null>(null);
+  const [bootError, setBootError] = useState<string | null>(null);
   const [thread, setThread] = useState<ThreadType | null>(null);
   const [approvals, setApprovals] = useState<ActionRequest[]>([]);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+
+  // get_boot_info() tells us whether AI is enabled/configured *before* we
+  // ever call get_thread()/list_approvals() -- those 500 against an
+  // unconfigured Paperclip client, which used to be the only signal a
+  // disabled site gave: "Paperclip unavailable: ... failed (500)" instead
+  // of an actionable configuration prompt.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .boot()
+      .then((b) => {
+        if (!cancelled) setBoot(b);
+      })
+      .catch((e) => {
+        if (!cancelled) setBootError((e as Error).message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const configured = Boolean(boot?.enabled && boot?.company && boot?.agent_id);
 
   const refresh = useCallback(async () => {
     try {
@@ -24,10 +50,11 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!configured) return;
     refresh();
     const id = window.setInterval(refresh, 5000);
     return () => window.clearInterval(id);
-  }, [refresh]);
+  }, [refresh, configured]);
 
   const send = async () => {
     const message = draft.trim();
@@ -41,6 +68,16 @@ export function App() {
       setSending(false);
     }
   };
+
+  if (bootError) return <div className="ai-error">Could not load AI status: {bootError}</div>;
+  if (!boot) return <div className="text-muted">Loading…</div>;
+  if (!configured) {
+    return (
+      <div className="ai-error">
+        ERPNext AI is not configured yet. Enable it and bind a Company and Agent ID in AI Settings.
+      </div>
+    );
+  }
 
   if (error) return <div className="ai-error">Paperclip unavailable: {error}</div>;
   if (!thread) return <div className="text-muted">Loading…</div>;

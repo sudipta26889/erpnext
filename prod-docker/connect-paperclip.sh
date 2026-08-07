@@ -33,24 +33,24 @@ set +a
 : "${ERPNEXT_API_SECRET:?ERPNext API secret for the AI service user (export inline, not stored in .env)}"
 
 echo "Registering ERPNext as an mcp_remote tool connection…"
-curl -sS -X POST \
-  -H "Authorization: Bearer $PAPERCLIP_BOARD_API_KEY" \
-  -H 'Content-Type: application/json' \
-  -d "{
-        \"name\": \"ERPNext\",
-        \"applicationName\": \"ERPNext\",
-        \"transport\": \"mcp_remote\",
-        \"authKind\": \"api_key\",
-        \"connectionKind\": \"managed\",
-        \"status\": \"active\",
-        \"enabled\": true,
-        \"transportConfig\": {
-          \"url\": \"${ERPNEXT_MCP_URL}/api/method/erpnext.ai.mcp.handle\",
-          \"headers\": {\"Authorization\": \"token ${ERPNEXT_API_KEY}:${ERPNEXT_API_SECRET}\"}
-        }
-      }" \
-  "$PAPERCLIP_URL/api/companies/$PAPERCLIP_COMPANY_ID/tools/connections"
-echo
+# -f: a 401/4xx/5xx must fail the script, not just print an error body and
+# carry on as if it worked.
+# -K -: curl reads headers and body from a config file on stdin instead of
+# argv. PAPERCLIP_BOARD_API_KEY and the ERPNext key/secret would otherwise
+# sit in this process's argv in plaintext for the whole call -- visible to
+# any local user via `ps` -- if passed as literal -H/-d arguments instead.
+# The response body is deliberately not printed: a reply that echoes
+# transportConfig back would print the ERPNext API key to the terminal.
+if ! curl -fsS -K - -o /dev/null "$PAPERCLIP_URL/api/companies/$PAPERCLIP_COMPANY_ID/tools/connections" <<CURLCFG
+header = "Authorization: Bearer ${PAPERCLIP_BOARD_API_KEY}"
+header = "Content-Type: application/json"
+data = "{\"name\": \"ERPNext\", \"applicationName\": \"ERPNext\", \"transport\": \"mcp_remote\", \"authKind\": \"api_key\", \"connectionKind\": \"managed\", \"status\": \"active\", \"enabled\": true, \"transportConfig\": {\"url\": \"${ERPNEXT_MCP_URL}/api/method/erpnext.ai.mcp.handle\", \"headers\": {\"Authorization\": \"token ${ERPNEXT_API_KEY}:${ERPNEXT_API_SECRET}\"}}}"
+CURLCFG
+then
+  echo "Registration failed (see curl's exit status/stderr above). Response body suppressed." >&2
+  exit 1
+fi
+echo "Registered."
 
 echo "Pushing settings into the site…"
 docker compose exec -T \

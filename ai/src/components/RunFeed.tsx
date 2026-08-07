@@ -17,25 +17,47 @@ const LABELS: Record<string, string> = {
   error: 'Error',
 };
 
+// A run that keeps returning events without any of them carrying a seq past
+// our cursor would otherwise re-fetch (and re-append) the same page forever.
+// Give up polling after this many ticks in a row make no progress, rather
+// than looping indefinitely.
+const MAX_STALLED_TICKS = 5;
+
 export function RunFeed({ runId }: { runId: string }) {
   const [events, setEvents] = useState<RunEvent[]>([]);
+  const [stalled, setStalled] = useState(false);
 
   useEffect(() => {
     let seq = 0;
     let cancelled = false;
+    let stalledTicks = 0;
 
     const tick = async () => {
       if (cancelled) return;
       try {
         const { events: fresh } = await api.events(runId, seq);
         if (fresh?.length) {
-          seq = Math.max(...fresh.map((e) => e.seq ?? seq));
           setEvents((prev) => [...prev, ...fresh]);
+          const seqs = fresh.map((e) => e.seq).filter((s): s is number => Number.isFinite(s));
+          const nextSeq = seqs.length ? Math.max(seq, ...seqs) : seq;
+          if (nextSeq > seq) {
+            seq = nextSeq;
+            stalledTicks = 0;
+          } else {
+            // The server sent events, but none advanced the cursor -- polling
+            // again right now would just re-fetch this same page.
+            stalledTicks += 1;
+          }
         }
       } catch {
         // Transient failures are expected while a run starts; keep polling.
       }
-      if (!cancelled) window.setTimeout(tick, 1000);
+      if (cancelled) return;
+      if (stalledTicks >= MAX_STALLED_TICKS) {
+        setStalled(true);
+        return;
+      }
+      window.setTimeout(tick, 1000);
     };
 
     tick();
@@ -54,6 +76,7 @@ export function RunFeed({ runId }: { runId: string }) {
           {e.message ? ` — ${e.message}` : ''}
         </li>
       ))}
+      {stalled ? <li className="text-muted">Feed stalled — refresh to check for updates.</li> : null}
     </ul>
   );
 }

@@ -21,7 +21,10 @@ async function call<T>(method: string, args: Record<string, unknown> = {}, post 
 
 export const api = {
   boot: () => call<{ enabled: boolean; company: string; agent_id: string }>('erpnext.ai.page.ai.ai.get_boot_info'),
-  thread: () => call<Thread>('erpnext.ai.paperclip.get_thread'),
+  // POST, not GET: get_thread can create a Paperclip issue as a side effect
+  // (see erpnext/ai/paperclip.py::get_thread) -- a state-changing call must
+  // go through the CSRF-token-checked path, which only applies to non-GET.
+  thread: () => call<Thread>('erpnext.ai.paperclip.get_thread', {}, true),
   send: (message: string) => call<{ issue_id: string }>('erpnext.ai.paperclip.send_message', { message }, true),
   events: (runId: string, afterSeq: number) =>
     call<{ events: RunEvent[] }>('erpnext.ai.paperclip.get_run_events', {

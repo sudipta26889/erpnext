@@ -82,6 +82,44 @@ class TestWriteTools(IntegrationTestCase):
 				idempotency_key="k-company",
 			)
 
+	def test_create_document_rejects_docstatus_in_data(self):
+		# CRITICAL: data={"docstatus": 1} on frappe.get_doc() is a real 0->1
+		# submit transition (_action = "submit", on_submit() runs -- GL/stock
+		# postings) even though it never went through submit_document, the
+		# only tool name the external platform's approval policy gates.
+		with self.assertRaises(registry.ToolError):
+			documents.create_document(
+				"Note", {"title": "sneaky", "docstatus": 1}, idempotency_key="k-docstatus-create"
+			)
+		# Nothing must have been created, submitted or otherwise -- rejection,
+		# not a stripped-and-proceed fallback.
+		self.assertFalse(frappe.db.exists("Note", {"title": "sneaky"}))
+
+	def test_create_document_rejects_other_default_fields(self):
+		# Not just docstatus -- the whole frappe.model.default_fields set plus
+		# the child-table bookkeeping fields are caller-forbidden.
+		for key, value in (
+			("owner", "someone@example.com"),
+			("name", "FORCED-NAME"),
+			("creation", "2020-01-01"),
+		):
+			with self.subTest(key=key):
+				with self.assertRaises(registry.ToolError):
+					documents.create_document(
+						"Note", {"title": "x", key: value}, idempotency_key=f"k-forbidden-{key}"
+					)
+
+	def test_create_document_rejects_write_forbidden_doctypes(self):
+		# IMPORTANT 6: these have no `company` field, so they would otherwise
+		# sail through assert_scopable() unchallenged on this single-company
+		# site -- User/Role are privilege escalation, Server Script is code
+		# execution around the call_method allowlist, AI Settings is the
+		# agent widening its own caps.
+		for doctype in ("User", "Role", "Server Script", "AI Settings"):
+			with self.subTest(doctype=doctype):
+				with self.assertRaises(registry.ToolError):
+					documents.create_document(doctype, {}, idempotency_key=f"k-forbidden-doctype-{doctype}")
+
 	# -- update_document ------------------------------------------------
 
 	def test_update_rejects_submitted_documents(self):
@@ -110,6 +148,23 @@ class TestWriteTools(IntegrationTestCase):
 		with self.assertRaises(frappe.PermissionError):
 			documents.update_document("Timesheet", ts.name, {"note": "x"})
 
+	def test_update_document_rejects_docstatus_in_data(self):
+		# CRITICAL: update_document's docstatus != 0 guard only inspects the
+		# *stored* value -- data={"docstatus": 1} on a draft is exactly the
+		# 0->1 submit transition that must never reach doc.set()/doc.save().
+		note = frappe.get_doc({"doctype": "Note", "title": "still-a-draft"}).insert()
+		with self.assertRaises(registry.ToolError):
+			documents.update_document("Note", note.name, {"docstatus": 1})
+		note.reload()
+		self.assertEqual(note.docstatus, 0)
+
+	def test_update_document_rejects_write_forbidden_doctypes(self):
+		# _load_for_write checks the doctype before ever loading the record,
+		# so even a real, existing name (Administrator always exists) never
+		# gets touched.
+		with self.assertRaises(registry.ToolError):
+			documents.update_document("User", "Administrator", {"roles": [{"role": "System Manager"}]})
+
 	# -- delete_document ------------------------------------------------
 
 	def test_delete_removes_the_document(self):
@@ -131,6 +186,168 @@ class TestWriteTools(IntegrationTestCase):
 	def test_delete_document_rejects_company(self):
 		with self.assertRaises(registry.ToolError):
 			documents.delete_document("Company", self.company)
+
+	# -- idempotency ------------------------------------------------------
+
+	def test_idempotency_key_reused_for_a_different_doctype_raises(self):
+		# IMPORTANT 4: the key alone is not enough to identify what it was
+		# for -- create_document("Sales Invoice", key="k") after
+		# create_document("Quotation", key="k") must not silently hand back
+		# the Quotation with reused: true.
+		documents.create_document(
+			"Note", {"title": "note-for-key-reuse"}, idempotency_key="cross-doctype-key"
+		)
+		with self.assertRaises(registry.ToolError):
+			# Contact, not ToDo: ToDo is COMPANY_LESS_SENSITIVE and would
+			# raise for a different reason before ever reaching the
+			# doctype-mismatch check this test targets.
+			documents.create_document("Contact", {}, idempotency_key="cross-doctype-key")
+
+	def test_idempotency_key_of_a_deleted_document_is_not_permanently_poisoned(self):
+		# IMPORTANT 5: _recall_idempotency returns None once the referenced
+		# document is gone, so a new one gets created for the same key --
+		# _remember_idempotency must then update the existing record in
+		# place rather than raising DuplicateEntryError (which would abort
+		# the transaction on PostgreSQL and roll back the very document just
+		# created, permanently poisoning the key).
+		first = documents.create_document(
+			"Note", {"title": "will-be-deleted"}, idempotency_key="deleted-doc-key"
+		)
+		frappe.delete_doc("Note", first["name"], force=True, ignore_permissions=True)
+
+		second = documents.create_document(
+			"Note", {"title": "recreated-under-same-key"}, idempotency_key="deleted-doc-key"
+		)
+		self.assertFalse(second["reused"])
+		self.assertNotEqual(second["name"], first["name"])
+		self.assertTrue(frappe.db.exists("Note", second["name"]))
+
+		record = frappe.db.get_value(
+			"AI Idempotency Record", "deleted-doc-key", ["ref_doctype", "ref_name"], as_dict=True
+		)
+		self.assertEqual(record.ref_name, second["name"])
+
+	def test_remember_idempotency_is_tolerant_of_a_concurrent_double_call(self):
+		# Simulates two concurrent create_document calls that both raced past
+		# _recall_idempotency before either had committed: both create their
+		# own document, then both call _remember_idempotency for the same
+		# key. Neither call may raise -- the loser must update the record in
+		# place instead of hitting DuplicateEntryError, and the transaction
+		# must remain usable afterwards (the same collision a PostgreSQL
+		# aborted transaction would otherwise poison).
+		doc_a = frappe.get_doc({"doctype": "Note", "title": "race-a"}).insert()
+		doc_b = frappe.get_doc({"doctype": "Note", "title": "race-b"}).insert()
+
+		documents._remember_idempotency("race-key", "Note", doc_a.name)
+		documents._remember_idempotency("race-key", "Note", doc_b.name)  # must not raise
+
+		record = frappe.db.get_value(
+			"AI Idempotency Record", "race-key", ["ref_doctype", "ref_name"], as_dict=True
+		)
+		self.assertEqual(record.ref_name, doc_b.name)
+		self.assertTrue(frappe.db.exists("Note", doc_b.name))
+
+	# -- value cap ------------------------------------------------------
+
+	def _two_plain_accounts(self, company: str) -> tuple[str, str]:
+		"""Two non-group, party-free leaf accounts for `company`.
+
+		Every Company gets a default chart of accounts on creation, so this
+		needs no fixtures of its own -- just two ordinary blank-account-type
+		leaf accounts that don't require a party (Receivable/Payable would).
+		"""
+		rows = frappe.get_all(
+			"Account",
+			filters={"company": company, "is_group": 0, "account_type": ""},
+			fields=["name"],
+			order_by="name",
+			limit=2,
+		)
+		if len(rows) < 2:
+			self.skipTest(f"{company} has no two plain leaf accounts to build a Journal Entry from.")
+		return rows[0].name, rows[1].name
+
+	def test_value_cap_checks_payment_entry_fields(self):
+		# IMPORTANT 2b: Payment Entry settles through paid_amount/
+		# base_paid_amount, not grand_total/base_grand_total/total -- the
+		# original field list was a complete no-op for it.
+		doc = frappe._dict(
+			{"doctype": "Payment Entry", "name": "PE-0001", "paid_amount": 5000, "base_paid_amount": 5000}
+		)
+		settings = frappe.get_single("AI Settings")
+		settings.max_document_value = 1000
+		settings.save()
+		with self.assertRaises(registry.ToolError):
+			documents._assert_value_cap(doc)
+
+	def test_value_cap_takes_the_maximum_of_present_fields(self):
+		# Not "the first populated field" -- the highest one, so a doctype
+		# that happens to populate an earlier-checked field with a small
+		# value can't shadow a much larger one later in the list.
+		doc = frappe._dict(
+			{
+				"doctype": "Journal Entry",
+				"name": "JE-0001",
+				"total": 1,
+				"total_debit": 5000,
+				"total_credit": 5000,
+			}
+		)
+		settings = frappe.get_single("AI Settings")
+		settings.max_document_value = 1000
+		settings.save()
+		with self.assertRaises(registry.ToolError):
+			documents._assert_value_cap(doc)
+
+	def test_create_document_enforces_value_cap_on_the_settled_journal_entry(self):
+		# IMPORTANT 2a+2b together, through the real tool: pre-insert this
+		# doc's total_debit/total_credit are unset (AccountsController.
+		# validate() computes them *during* insert()), and grand_total/
+		# base_grand_total/total (the old field list) don't exist on Journal
+		# Entry at all -- both bugs combined made the cap a complete no-op.
+		debit_account, credit_account = self._two_plain_accounts(self.company)
+		settings = frappe.get_single("AI Settings")
+		settings.max_document_value = 1000
+		settings.save()
+
+		before = frappe.db.count("Journal Entry")
+		data = {
+			"voucher_type": "Journal Entry",
+			"posting_date": frappe.utils.today(),
+			"company": self.company,
+			"accounts": [
+				{"account": debit_account, "debit_in_account_currency": 5000},
+				{"account": credit_account, "credit_in_account_currency": 5000},
+			],
+		}
+		with self.assertRaises(registry.ToolError):
+			documents.create_document("Journal Entry", data, idempotency_key="je-over-cap")
+
+		# The savepoint must leave nothing behind -- an over-cap document
+		# must never be persisted, not even as an orphaned draft, and the key
+		# must not be spent on the rejected attempt.
+		self.assertEqual(frappe.db.count("Journal Entry"), before)
+		self.assertIsNone(frappe.db.exists("AI Idempotency Record", "je-over-cap"))
+
+	def test_create_document_journal_entry_within_cap_succeeds(self):
+		# Regression guard: the savepoint/rollback plumbing must not get in
+		# the way of a legitimate, within-cap creation.
+		debit_account, credit_account = self._two_plain_accounts(self.company)
+		data = {
+			"voucher_type": "Journal Entry",
+			"posting_date": frappe.utils.today(),
+			"company": self.company,
+			"accounts": [
+				{"account": debit_account, "debit_in_account_currency": 100},
+				{"account": credit_account, "credit_in_account_currency": 100},
+			],
+		}
+		settings = frappe.get_single("AI Settings")
+		settings.max_document_value = 1000
+		settings.save()
+		out = documents.create_document("Journal Entry", data, idempotency_key="je-within-cap")
+		self.assertFalse(out["reused"])
+		self.assertTrue(frappe.db.exists("Journal Entry", out["name"]))
 
 	# -- call_method ------------------------------------------------------
 

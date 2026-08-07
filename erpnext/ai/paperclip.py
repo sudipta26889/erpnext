@@ -7,6 +7,7 @@ than issued from the browser, so the board API key never reaches the client and
 each entry point re-checks the caller's role.
 """
 
+import functools
 import json
 
 import frappe
@@ -21,6 +22,29 @@ STANDING_ISSUE_TITLE = "ERPNext Operations"
 
 class PaperclipError(Exception):
 	pass
+
+
+def _sanitize_paperclip_errors(fn):
+	"""Wrap a whitelisted Paperclip proxy so a PaperclipError never escapes to
+	the caller with the remote server's own words in it.
+
+	`PaperclipClient.request()` deliberately keeps only the HTTP status code
+	in its own exception message (see below) -- the remote's response body
+	never gets that far. This decorator is the belt to that braces: whatever
+	a PaperclipError says, by construction or by a future change that
+	forgets the rule, the HTTP caller only ever sees one fixed message. The
+	real detail is logged server-side either way.
+	"""
+
+	@functools.wraps(fn)
+	def wrapper(*args, **kwargs):
+		try:
+			return fn(*args, **kwargs)
+		except PaperclipError as exc:
+			frappe.log_error(title="Paperclip request failed", message=str(exc))
+			frappe.throw(_("Paperclip is unavailable right now. Try again shortly."))
+
+	return wrapper
 
 
 class PaperclipClient:
@@ -43,9 +67,19 @@ class PaperclipClient:
 			timeout=TIMEOUT,
 		)
 		if response.status_code < 200 or response.status_code >= 300:
+			# The remote's response body is untrusted content once Paperclip is
+			# compromised, misconfigured or simply having a bad day -- it must
+			# never ride along in an exception message that could reach an HTTP
+			# response (Frappe echoes an uncaught exception's last traceback
+			# line into the response when traceback-in-response is enabled).
+			# Full detail (including the body) goes to the Error Log only.
+			frappe.log_error(
+				title="Paperclip request failed",
+				message=f"{method} {path} -> {response.status_code}\n\n{response.text[:2000]}",
+			)
 			raise PaperclipError(
-				_("Paperclip {0} {1} failed ({2}): {3}").format(
-					method, path, response.status_code, response.text[:300]
+				_("Paperclip {0} {1} failed ({2}). The detail has been logged.").format(
+					method, path, response.status_code
 				)
 			)
 		try:
@@ -109,9 +143,21 @@ def _standing_issue(client: PaperclipClient) -> str:
 	return created["id"]
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
+@_sanitize_paperclip_errors
 def get_thread() -> dict:
-	"""Comments plus live run state for the standing issue."""
+	"""Comments plus live run state for the standing issue.
+
+	POST-only, not GET: `_standing_issue()` above can *create* the standing
+	issue as a side effect the first time it's called (or whenever it was
+	previously closed) -- a state-changing action reachable via CSRF if it
+	were a GET, since GET requests carry no CSRF token and Frappe does not
+	require one for them. Frappe's own `X-Frappe-CSRF-Token` check applies to
+	POST, closing that off. This does mean the read path and the
+	occasionally-side-effecting issue lookup aren't split apart -- simpler
+	than adding a second endpoint for a rare, idempotent (find-or-create)
+	side effect.
+	"""
 	assert_ai_user()
 	client = get_client()
 	issue_id = _standing_issue(client)
@@ -123,6 +169,7 @@ def get_thread() -> dict:
 
 
 @frappe.whitelist(methods=["POST"])
+@_sanitize_paperclip_errors
 def send_message(message: str) -> dict:
 	"""Post a message. This enqueues an agent wake (wakeReason 'issue_commented')."""
 	assert_ai_user()
@@ -133,17 +180,25 @@ def send_message(message: str) -> dict:
 
 
 @frappe.whitelist()
+@_sanitize_paperclip_errors
 def get_run_events(run_id: str, after_seq: int = 0) -> dict:
 	"""Cursor-based incremental run feed. Runs have no SSE, so the UI polls this."""
 	assert_ai_user()
-	return {
-		"events": get_client().request(
-			"GET", f"/api/heartbeat-runs/{run_id}/events", params={"afterSeq": int(after_seq)}
-		)
-	}
+	raw = get_client().request(
+		"GET", f"/api/heartbeat-runs/{run_id}/events", params={"afterSeq": int(after_seq)}
+	)
+	# Normalise defensively: this wraps Paperclip's reply as {"events": ...},
+	# but if Paperclip's own reply is already {"events": [...]} rather than a
+	# bare list, that would otherwise double-wrap into
+	# {"events": {"events": [...]}} -- fresh?.length on the frontend would
+	# then be undefined forever and the feed would poll without ever
+	# rendering anything.
+	events = raw.get("events") if isinstance(raw, dict) else raw
+	return {"events": events if isinstance(events, list) else []}
 
 
 @frappe.whitelist()
+@_sanitize_paperclip_errors
 def list_approvals() -> dict:
 	assert_ai_user()
 	client = get_client()
@@ -153,6 +208,7 @@ def list_approvals() -> dict:
 
 
 @frappe.whitelist(methods=["POST"])
+@_sanitize_paperclip_errors
 def resolve_approval(action_request_id: str, approve: bool) -> dict:
 	assert_ai_user()
 	verb = "approve" if approve else "decline"

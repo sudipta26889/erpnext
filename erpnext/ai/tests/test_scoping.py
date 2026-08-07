@@ -225,3 +225,37 @@ class TestScoping(IntegrationTestCase):
 		self._make_second_company()
 		with self.assertRaises(registry.ToolError):
 			scoping.assert_scopable("Currency")
+
+	# -- IMPORTANT 6: write-side deny-list -----------------------------------
+	# Privilege escalation and code-execution doctypes have no `company`
+	# field, so they pass assert_scopable() unchallenged on this
+	# single-company site -- assert_write_allowed_doctype is the guard that
+	# has nothing to do with company scoping at all.
+
+	def test_assert_write_allowed_doctype_raises_for_user(self):
+		with self.assertRaises(registry.ToolError):
+			scoping.assert_write_allowed_doctype("User")
+
+	def test_assert_write_allowed_doctype_raises_for_role(self):
+		with self.assertRaises(registry.ToolError):
+			scoping.assert_write_allowed_doctype("Role")
+
+	def test_assert_write_allowed_doctype_raises_for_server_script(self):
+		# call_method is allowlist-only specifically to keep arbitrary code
+		# execution out of this tool surface; creating a Server Script
+		# through create_document would otherwise walk straight around it.
+		with self.assertRaises(registry.ToolError):
+			scoping.assert_write_allowed_doctype("Server Script")
+
+	def test_assert_write_allowed_doctype_raises_for_property_setter(self):
+		with self.assertRaises(registry.ToolError):
+			scoping.assert_write_allowed_doctype("Property Setter")
+
+	def test_assert_write_allowed_doctype_raises_for_ai_settings(self):
+		# The agent must never be able to widen its own value cap or
+		# method/doctype allowlists by editing the document that defines them.
+		with self.assertRaises(registry.ToolError):
+			scoping.assert_write_allowed_doctype("AI Settings")
+
+	def test_assert_write_allowed_doctype_passes_for_sales_invoice(self):
+		scoping.assert_write_allowed_doctype("Sales Invoice")  # must not raise
