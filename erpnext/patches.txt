@@ -510,3 +510,4 @@ erpnext.patches.v16_0.merge_seeded_item_group_root
 erpnext.patches.v16_0.set_stock_uom_in_job_card
 erpnext.patches.v16_0.drop_taskpilot_replaced_doctypes
 erpnext.patches.v16_0.migrate_projects_to_taskpilot
+erpnext.patches.v16_0.normalize_deprecated_timezone
