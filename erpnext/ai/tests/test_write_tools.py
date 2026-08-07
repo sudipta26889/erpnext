@@ -329,6 +329,30 @@ class TestWriteTools(IntegrationTestCase):
 		item.reload()
 		self.assertEqual(len(item.reorder_levels or []), 0)
 
+	def test_update_document_rejects_child_table_doctypes(self):
+		# CRITICAL 1: _assert_writable_doctype/FIELD_FORBIDDEN_KEYS above are
+		# both keyed on the *parent* doctype name, and doc.check_permission()
+		# on a child row resolves against the parent via
+		# has_child_permission() -- so before this fix, a row name (readable
+		# via get_document() on the parent) let update_document write any
+		# child table directly. "Item Reorder" re-arms the exact
+		# reorder_item scheduler path Item.reorder_levels was closed for
+		# above, via its child-table spelling; "Has Role" is privilege
+		# escalation around the User/Role deny-list entries -- User.roles is
+		# permlevel 1 and System Manager grants permlevel-1 write, so a row
+		# written straight into tabHas Role takes effect on the next
+		# roles-cache clear. The guard fires on doctype metadata alone,
+		# before frappe.get_doc() ever loads a row by name, so no real
+		# fixture row is needed to prove it -- and none is left behind.
+		with self.assertRaises(registry.ToolError):
+			documents.update_document(
+				"Item Reorder",
+				"any-row",
+				{"warehouse_reorder_level": 999999, "warehouse_reorder_qty": 999999},
+			)
+		with self.assertRaises(registry.ToolError):
+			documents.update_document("Has Role", "any-row", {"role": "System Manager"})
+
 	# -- delete_document ------------------------------------------------
 
 	def test_delete_removes_the_document(self):

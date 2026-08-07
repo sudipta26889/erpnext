@@ -375,12 +375,32 @@ def _assert_writable_doctype(doctype: str) -> None:
 	scope for this tool surface regardless of which company an agent is bound
 	to, so it is refused outright here rather than stretching identity-scoping
 	into a write guarantee it was never designed to provide.
+
+	CRITICAL 1: child (istable) doctypes get an unconditional block too.
+	_assert_writable_doctype/FIELD_FORBIDDEN_KEYS above are both keyed on the
+	*parent* doctype name, and doc.check_permission() on a child row resolves
+	against the parent via has_child_permission() -- so without this, a row
+	name (readable via get_document() on the parent) let update_document
+	write any child table directly, re-arming Item.reorder_levels via its
+	"Item Reorder" spelling and, worse, writing "Has Role" rows straight into
+	tabHas Role: privilege escalation around the User/Role deny-list entries
+	above, since User.roles is permlevel 1 and System Manager grants
+	permlevel-1 write. Child rows are never legitimate business data for this
+	tool surface to touch on their own -- they must be written through their
+	parent document.
 	"""
 	scoping.assert_doctype_scopable(doctype)
 	scoping.assert_scopable(doctype)
 	scoping.assert_write_allowed_doctype(doctype)
 	if doctype == "Company":
 		raise ToolError(_("Company records cannot be created, changed or deleted through this agent."))
+	if frappe.get_meta(doctype).istable:
+		raise ToolError(
+			_(
+				"{0} is a child table and cannot be written directly through this agent. "
+				"Edit it through its parent document instead."
+			).format(doctype)
+		)
 
 
 def _assert_company_in_scope_or_deny(company: str) -> None:

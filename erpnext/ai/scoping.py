@@ -172,6 +172,17 @@ WRITE_FORBIDDEN_DOCTYPES: frozenset[str] = frozenset(
 		"Log Settings",
 		"Security Settings",
 		"Email Digest",
+		# Email Domain has no `company` field and copies smtp_server/
+		# email_server/ports/SSL settings into every Email Account sharing
+		# that domain on save (email_domain.py's on_update) -- the exact
+		# blast radius Email Account above is deny-listed for, reachable
+		# without ever touching Email Account itself.
+		"Email Domain",
+		# Manufacturing Settings.update_bom_costs_automatically alone gates
+		# bom_update_tool.py's daily auto_update_latest_price_in_all_boms --
+		# a mass BOM cost rewrite (valuation drift), the same family as the
+		# Stock/Buying/Selling/Accounts/System Settings doctypes above.
+		"Manufacturing Settings",
 	}
 )
 
