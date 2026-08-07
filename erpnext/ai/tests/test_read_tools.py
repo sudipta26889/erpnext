@@ -199,7 +199,13 @@ class TestReadTools(IntegrationTestCase):
 		self.assertIn(self.company, names)
 		self.assertNotIn(other_company, names)
 
-		with self.assertRaises(registry.ToolError):
+		# ToolError, not PermissionError: get_document's post-read company
+		# check raises frappe.PermissionError (see
+		# TestMCPPermissionBoundary.test_get_document_out_of_scope_company_same_message_as_missing_record),
+		# but that only matters through the MCP transport, which is what
+		# collapses it into the uniform "Not permitted" message. Direct calls
+		# see the real exception type.
+		with self.assertRaises(frappe.PermissionError):
 			documents.get_document("Company", other_company)
 
 		# Company-less doctypes stop being usable the instant a second Company
@@ -221,7 +227,8 @@ class TestMCPPermissionBoundary(IntegrationTestCase):
 		doc.paperclip_company_id = "c-1"
 		doc.agent_id = "a-1"
 		doc.board_api_key = "secret"
-		doc.erpnext_company = frappe.db.get_value("Company", {}, "name")
+		self.company = frappe.db.get_value("Company", {}, "name")
+		doc.erpnext_company = self.company
 		doc.save()
 
 		self.user_email = "ai-lowpriv@example.com"
@@ -239,6 +246,30 @@ class TestMCPPermissionBoundary(IntegrationTestCase):
 	def tearDown(self):
 		frappe.set_user("Administrator")
 		frappe.db.rollback()
+
+	def _make_second_company(self) -> str:
+		"""Return a second Company, creating a throwaway one if the site only has one.
+
+		Mirrors TestReadTools._make_second_company (this module).
+		"""
+		existing = frappe.db.get_value("Company", {"name": ["!=", self.company]}, "name")
+		if existing:
+			return existing
+		previous_flag = frappe.local.flags.ignore_chart_of_accounts
+		frappe.local.flags.ignore_chart_of_accounts = True
+		try:
+			doc = frappe.get_doc(
+				{
+					"doctype": "Company",
+					"company_name": "AI MCP Boundary Test Co",
+					"default_currency": "INR",
+					"country": "India",
+				}
+			)
+			doc.insert(ignore_permissions=True)
+			return doc.name
+		finally:
+			frappe.local.flags.ignore_chart_of_accounts = previous_flag
 
 	def test_low_privilege_user_is_denied_through_tools_call(self):
 		from erpnext.ai import mcp
@@ -294,4 +325,49 @@ class TestMCPPermissionBoundary(IntegrationTestCase):
 		self.assertTrue(missing["result"]["isError"])
 		self.assertTrue(unreadable["result"]["isError"])
 		self.assertEqual(missing_text, unreadable_text)
+		self.assertEqual(missing_text, frappe._("Not permitted for the current ERPNext user."))
+
+	def test_get_document_same_message_for_missing_and_out_of_scope_company(self):
+		from erpnext.ai import mcp
+
+		# Sales User (self.user_email's only role) has read=1 on Company, so
+		# this is a genuinely existing-and-ACL-readable record in a company
+		# AI Settings does not bind -- the exact case documents.get_document's
+		# company-scope check exists to guard, not just another "doesn't
+		# exist" case in disguise. Before this fix, that check raised its own
+		# ToolError (naming the company and what's permitted), which mcp.py's
+		# tools/call handler echoed verbatim -- distinguishable from both the
+		# missing-record and unreadable-record messages, and so itself an
+		# existence oracle for out-of-scope companies.
+		other_company = self._make_second_company()
+
+		frappe.set_user(self.user_email)
+		missing = mcp.dispatch(
+			{
+				"jsonrpc": "2.0",
+				"id": 1,
+				"method": "tools/call",
+				"params": {
+					"name": "get_document",
+					"arguments": {"doctype": "Company", "name": "No Such Company Ltd"},
+				},
+			}
+		)
+		out_of_scope = mcp.dispatch(
+			{
+				"jsonrpc": "2.0",
+				"id": 2,
+				"method": "tools/call",
+				"params": {
+					"name": "get_document",
+					"arguments": {"doctype": "Company", "name": other_company},
+				},
+			}
+		)
+
+		missing_text = missing["result"]["content"][0]["text"]
+		out_of_scope_text = out_of_scope["result"]["content"][0]["text"]
+		self.assertTrue(missing["result"]["isError"])
+		self.assertTrue(out_of_scope["result"]["isError"])
+		self.assertEqual(missing_text, out_of_scope_text)
 		self.assertEqual(missing_text, frappe._("Not permitted for the current ERPNext user."))

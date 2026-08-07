@@ -68,6 +68,29 @@ def search_documents(
 	)
 
 
+def _assert_company_allowed_for_get_document(company: str) -> None:
+	"""get_document's post-read company-scope check, specifically.
+
+	scoping.assert_company_allowed() raises a ToolError naming the company and
+	listing what's permitted -- the right, actionable message for
+	search_documents/run_report, where the caller is validating a *filter*,
+	not confirming a specific record. Here, by the time this runs the caller
+	already knows the record exists and is readable (check_permission("read")
+	passed above), so that same message would be a distinguishable "yes, but
+	wrong company" reply -- still an existence oracle, just a milder one than
+	"doesn't exist" vs "not permitted". mcp.py's tools/call handler checks its
+	verbatim-ToolError branch before its uniform-message
+	(PermissionError, DoesNotExistError) branch, so raising ToolError here
+	would leak past the hardening that branch exists to provide. Raise
+	frappe.PermissionError instead so this collapses into that same uniform
+	branch.
+	"""
+	try:
+		scoping.assert_company_allowed(company)
+	except ToolError:
+		raise frappe.PermissionError
+
+
 @tool(
 	name="get_document",
 	description="Fetch one document in full, including its child tables. Tier: free.",
@@ -99,8 +122,8 @@ def get_document(doctype: str, name: str) -> dict:
 	# readable, so a distinct "wrong company" message leaks nothing new.
 	if doctype == "Company":
 		# Company carries no `company` field of its own -- it IS the entity.
-		scoping.assert_company_allowed(name)
+		_assert_company_allowed_for_get_document(name)
 	elif scoping.has_company_field(doctype) and doc.get("company"):
-		scoping.assert_company_allowed(doc.company)
+		_assert_company_allowed_for_get_document(doc.company)
 
 	return doc.as_dict(no_default_fields=False)

@@ -10,13 +10,42 @@ from erpnext.ai.tools import discovery
 
 class TestDiscovery(IntegrationTestCase):
 	def setUp(self):
+		self.company = frappe.db.get_value("Company", {}, "name")
 		doc = frappe.get_single("AI Settings")
-		doc.erpnext_company = frappe.db.get_value("Company", {}, "name")
+		doc.erpnext_company = self.company
 		doc.save()
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
 		frappe.db.rollback()
+
+	def _make_second_company(self) -> str:
+		"""Return a second Company, creating a throwaway one if the site only has one.
+
+		Mirrors TestReadTools._make_second_company (test_read_tools.py):
+		ignore_chart_of_accounts skips Company.on_update()'s default-accounts and
+		default-warehouses creation (the latter needs a "Warehouse Type: Transit"
+		fixture this trimmed test site doesn't have) -- irrelevant to what this
+		test checks, and the whole insert is rolled back in tearDown.
+		"""
+		existing = frappe.db.get_value("Company", {"name": ["!=", self.company]}, "name")
+		if existing:
+			return existing
+		previous_flag = frappe.local.flags.ignore_chart_of_accounts
+		frappe.local.flags.ignore_chart_of_accounts = True
+		try:
+			doc = frappe.get_doc(
+				{
+					"doctype": "Company",
+					"company_name": "AI Discovery Test Co",
+					"default_currency": "INR",
+					"country": "India",
+				}
+			)
+			doc.insert(ignore_permissions=True)
+			return doc.name
+		finally:
+			frappe.local.flags.ignore_chart_of_accounts = previous_flag
 
 	def test_company_context_grounds_the_agent(self):
 		out = discovery.get_company_context()
@@ -38,6 +67,27 @@ class TestDiscovery(IntegrationTestCase):
 			self.assertIn(doctype, out["counts"])
 			self.assertIsInstance(out["counts"][doctype], int)
 			self.assertGreaterEqual(out["counts"][doctype], 0)
+
+		# A non-negative int is also what an unscoped frappe.db.count(doctype)
+		# would return, so the assertions above would still pass even if the
+		# company filter silently regressed away. Prove scoping directly: seed
+		# a second Company outside AI Settings' bound scope (see setUp -- only
+		# self.company is bound), create a Sales Order against it, and confirm
+		# the reported count doesn't grow to include it. ignore_mandatory/
+		# ignore_links/flags.ignore_validate skip the full sales-transaction
+		# validation (customer, items, delivery date, ...) that this trimmed
+		# test site has no Customer/Item fixtures to satisfy -- irrelevant to
+		# what this test checks, which only needs a row that exists and
+		# carries the out-of-scope company.
+		other_company = self._make_second_company()
+		before = discovery.get_company_context()["counts"]["Sales Order"]
+
+		so = frappe.get_doc({"doctype": "Sales Order", "company": other_company})
+		so.flags.ignore_validate = True
+		so.insert(ignore_permissions=True, ignore_mandatory=True, ignore_links=True)
+
+		after = discovery.get_company_context()["counts"]["Sales Order"]
+		self.assertEqual(after, before)
 
 	def test_search_doctypes_finds_by_label(self):
 		names = [d["doctype"] for d in discovery.search_doctypes("sales invoice")]
