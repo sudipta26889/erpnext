@@ -43,12 +43,28 @@ def workspace_map() -> dict[str, dict]:
 	"""Doctype -> {workspace, module, url}.
 
 	Answers "where is what" from this install's own Workspace links, so it
-	reflects customisations that no published manual ever will.
+	reflects customisations that no published manual ever will. Restricted to
+	workspaces the current user can actually see: frappe.get_all() reads
+	Workspace Link -- a child table of Workspace -- with ignore_permissions=True,
+	so without this filter another user's private workspace layout would leak
+	to everyone.
 	"""
+	visible_workspaces = frappe.get_all(
+		"Workspace",
+		or_filters={"public": 1, "for_user": frappe.session.user},
+		pluck="name",
+	)
 	links = frappe.get_all(
 		"Workspace Link",
-		filters={"link_type": "DocType", "type": "Link"},
+		filters={
+			"link_type": "DocType",
+			"type": "Link",
+			"parent": ["in", visible_workspaces],
+		},
 		fields=["link_to", "parent", "label"],
+		# Dedup below is "first hit wins" -- must be deterministic, not
+		# whatever order the DB happens to return rows in.
+		order_by="parent asc, idx asc",
 	)
 	mapping: dict[str, dict] = {}
 	for link in links:

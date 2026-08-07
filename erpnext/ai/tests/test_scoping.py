@@ -188,3 +188,40 @@ class TestScoping(IntegrationTestCase):
 
 		with self.assertRaises(registry.ToolError):
 			scoping.assert_company_allowed("Some Unbound Third Entity Ltd")
+
+	# -- the multi-company guard: fail closed the instant it applies ---------
+
+	def test_is_multi_company_site_false_with_one_company(self):
+		self.assertFalse(scoping.is_multi_company_site())
+
+	def test_is_multi_company_site_true_with_two_companies(self):
+		self._make_second_company()
+		self.assertTrue(scoping.is_multi_company_site())
+
+	def test_assert_scopable_passes_for_company_field_doctype_on_single_company_site(self):
+		scoping.assert_scopable("Sales Invoice")  # must not raise
+
+	def test_assert_scopable_passes_for_company_field_doctype_on_multi_company_site(self):
+		# Has a `company` field to scope on -- the guard is about doctypes that
+		# don't, so this must keep working once a second Company exists.
+		self._make_second_company()
+		scoping.assert_scopable("Sales Invoice")  # must not raise
+
+	def test_assert_scopable_passes_for_company_doctype_on_single_company_site(self):
+		scoping.assert_scopable("Company")  # must not raise
+
+	def test_assert_scopable_passes_for_company_doctype_on_multi_company_site(self):
+		# Company carries no `company` field of its own -- it IS the entity,
+		# scoped by identity (see documents.py), so it is always scopable and
+		# must never be refused by this doctype-field-based guard.
+		self._make_second_company()
+		scoping.assert_scopable("Company")  # must not raise
+
+	def test_assert_scopable_passes_for_company_less_doctype_on_single_company_site(self):
+		# Nothing to leak between companies when there is only one.
+		scoping.assert_scopable("Currency")  # must not raise
+
+	def test_assert_scopable_raises_for_company_less_doctype_on_multi_company_site(self):
+		self._make_second_company()
+		with self.assertRaises(registry.ToolError):
+			scoping.assert_scopable("Currency")

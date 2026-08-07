@@ -11,7 +11,7 @@ import frappe
 from frappe import _
 
 from erpnext.ai import scoping
-from erpnext.ai.registry import ToolError, assert_value_within_cap, clamp_limit, tool
+from erpnext.ai.registry import ToolError, clamp_limit, tool
 
 
 @tool(
@@ -46,17 +46,25 @@ def search_documents(
 	# (Version, Deleted Document, ...) carry no `company` field but can still
 	# expose the contents of documents belonging to any company.
 	scoping.assert_doctype_scopable(doctype)
+	scoping.assert_scopable(doctype)
 
 	if not frappe.db.exists("DocType", doctype):
 		raise ToolError(_("No such doctype: {0}").format(doctype))
 
+	scoped_filters = scoping.scope_filters(doctype, filters)
+	if doctype == "Company":
+		# Company carries no `company` field of its own to scope on -- it IS
+		# the entity. Scope by identity instead: only companies this agent is
+		# bound to, never every legal entity on the site.
+		scoped_filters["name"] = ["in", scoping.bound_companies()]
+
 	return frappe.get_list(
 		doctype,
-		filters=scoping.scope_filters(doctype, filters),
+		filters=scoped_filters,
 		fields=fields or ["name"],
 		order_by=order_by or "modified desc",
 		limit=clamp_limit(limit),
-		offset=start or 0,
+		offset=max(0, int(start or 0)),
 	)
 
 
@@ -73,12 +81,26 @@ def search_documents(
 def get_document(doctype: str, name: str) -> dict:
 	# Same "before touching any data" guarantee as search_documents above.
 	scoping.assert_doctype_scopable(doctype)
+	scoping.assert_scopable(doctype)
 
-	if not frappe.db.exists(doctype, name):
-		raise ToolError(_("{0} {1} not found.").format(doctype, name))
-
+	# No frappe.db.exists() pre-check: it is permission-free, so a name that
+	# exists but is unreadable would raise a distinguishable ToolError here
+	# while a genuinely missing name raises a different one below -- exactly
+	# the record-enumeration oracle the MCP transport was hardened to close.
+	# frappe.get_doc() raising DoesNotExistError lands in that same uniform
+	# branch instead.
 	doc = frappe.get_doc(doctype, name)
 	doc.check_permission("read")
-	if scoping.has_company_field(doctype) and doc.get("company"):
+	doc.apply_fieldlevel_read_permissions()
+
+	# The company-scope check is itself a (milder) version of the same
+	# oracle, so it must never run before check_permission() above: by the
+	# time it runs, the caller already knows the record exists and is
+	# readable, so a distinct "wrong company" message leaks nothing new.
+	if doctype == "Company":
+		# Company carries no `company` field of its own -- it IS the entity.
+		scoping.assert_company_allowed(name)
+	elif scoping.has_company_field(doctype) and doc.get("company"):
 		scoping.assert_company_allowed(doc.company)
+
 	return doc.as_dict(no_default_fields=False)

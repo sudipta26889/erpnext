@@ -1,10 +1,12 @@
 # Copyright (c) 2026, Frappe Technologies Pvt. Ltd. and contributors
 # For license information, please see license.txt
 
+from unittest import mock
+
 import frappe
 from frappe.tests import IntegrationTestCase
 
-from erpnext.ai import registry
+from erpnext.ai import registry, scoping
 from erpnext.ai.tools import documents, reports
 
 
@@ -13,11 +15,41 @@ class TestReadTools(IntegrationTestCase):
 		self.company = frappe.db.get_value("Company", {}, "name")
 		doc = frappe.get_single("AI Settings")
 		doc.erpnext_company = self.company
+		doc.additional_companies = []
 		doc.max_batch_size = 5
 		doc.save()
 
 	def tearDown(self):
+		frappe.set_user("Administrator")
 		frappe.db.rollback()
+
+	def _make_second_company(self) -> str:
+		"""Return a second Company, creating a throwaway one if the site only has one.
+
+		Mirrors TestScoping._make_second_company (test_scoping.py):
+		ignore_chart_of_accounts skips Company.on_update()'s default-accounts and
+		default-warehouses creation (the latter needs a "Warehouse Type: Transit"
+		fixture this trimmed test site doesn't have) -- irrelevant to what these
+		tests check, and the whole insert is rolled back in tearDown.
+		"""
+		existing = frappe.db.get_value("Company", {"name": ["!=", self.company]}, "name")
+		if existing:
+			return existing
+		previous_flag = frappe.local.flags.ignore_chart_of_accounts
+		frappe.local.flags.ignore_chart_of_accounts = True
+		try:
+			doc = frappe.get_doc(
+				{
+					"doctype": "Company",
+					"company_name": "AI Read Tools Test Co",
+					"default_currency": "INR",
+					"country": "India",
+				}
+			)
+			doc.insert(ignore_permissions=True)
+			return doc.name
+		finally:
+			frappe.local.flags.ignore_chart_of_accounts = previous_flag
 
 	def test_search_documents_returns_rows(self):
 		out = documents.search_documents("Company", fields=["name"])
@@ -45,13 +77,73 @@ class TestReadTools(IntegrationTestCase):
 			documents.search_documents("Deleted Document", fields=["name"])
 
 	def test_get_document_includes_child_tables(self):
-		out = documents.get_document("Company", self.company)
-		self.assertEqual(out["name"], self.company)
-		self.assertEqual(out["doctype"], "Company")
+		contact = frappe.get_doc({"doctype": "Contact", "first_name": "AI Read Tools Test Contact"})
+		contact.append("phone_nos", {"phone": "+1-555-0100"})
+		contact.insert(ignore_permissions=True)
 
-	def test_get_missing_document_raises_tool_error(self):
-		with self.assertRaises(registry.ToolError):
+		out = documents.get_document("Contact", contact.name)
+
+		self.assertEqual(out["name"], contact.name)
+		self.assertEqual(out["doctype"], "Contact")
+		self.assertEqual(len(out["phone_nos"]), 1)
+		self.assertEqual(out["phone_nos"][0]["phone"], "+1-555-0100")
+
+	def test_get_missing_document_raises_does_not_exist_error(self):
+		# No frappe.db.exists() pre-check anymore (see documents.get_document):
+		# that was permission-free and re-opened a record-enumeration oracle, so
+		# a missing name now surfaces as frappe.DoesNotExistError straight from
+		# get_doc() itself. It's the MCP transport, not this direct call, that
+		# normalises it into the same message as an existing-but-unreadable
+		# record -- see
+		# TestMCPPermissionBoundary.test_get_document_same_message_for_missing_and_unreadable_record.
+		with self.assertRaises(frappe.DoesNotExistError):
 			documents.get_document("Company", "No Such Company Ltd")
+
+	def test_get_document_strips_permlevel_field_without_permlevel_access(self):
+		# Timesheet Detail.billing_rate/costing_rate are permlevel 1, read-gated
+		# to roles like Accounts User -- Projects User (granted below) is not
+		# one of them, so as_dict() must not hand these over unfiltered.
+		ts = frappe.get_doc(
+			{
+				"doctype": "Timesheet",
+				"company": self.company,
+				"time_logs": [{"is_billable": 1, "billing_rate": 999, "costing_rate": 888}],
+			}
+		)
+		ts.insert(ignore_permissions=True)
+
+		user_email = "ai-permlevel-test@example.com"
+		if not frappe.db.exists("User", user_email):
+			frappe.get_doc(
+				{
+					"doctype": "User",
+					"email": user_email,
+					"first_name": "AI Permlevel Test",
+					"send_welcome_email": 0,
+					"roles": [{"role": "Projects User"}],
+				}
+			).insert(ignore_permissions=True)
+
+		frappe.set_user(user_email)
+		out = documents.get_document("Timesheet", ts.name)
+		frappe.set_user("Administrator")
+
+		# apply_fieldlevel_read_permissions() deletes the instance attribute,
+		# but get_valid_dict() iterates the doctype's full field list and
+		# type-coerces the now-missing value -- so the key survives in the
+		# dict, reset to the Currency fieldtype's falsy default, not the real
+		# 999/888. That's the same shape frappe.client.get() returns for any
+		# permlevel field on a normal document read, so check the value was
+		# neutralised rather than that the key vanished.
+		row = out["time_logs"][0]
+		self.assertFalse(row.get("billing_rate"))
+		self.assertFalse(row.get("costing_rate"))
+
+		# Sanity check: Administrator (who apply_fieldlevel_read_permissions()
+		# never strips fields for) still sees the real values, so this isn't
+		# passing because the field was never actually saved.
+		admin_out = documents.get_document("Timesheet", ts.name)
+		self.assertEqual(admin_out["time_logs"][0]["billing_rate"], 999)
 
 	def test_get_document_rejects_version_doctype(self):
 		with self.assertRaises(registry.ToolError):
@@ -64,6 +156,59 @@ class TestReadTools(IntegrationTestCase):
 	def test_run_report_rejects_unknown_report(self):
 		with self.assertRaises(registry.ToolError):
 			reports.run_report("Not A Report")
+
+	def test_run_report_executes_successfully(self):
+		out = reports.run_report(
+			"General Ledger", filters={"from_date": "2020-01-01", "to_date": "2030-01-01"}
+		)
+		self.assertIn("columns", out)
+		self.assertIsInstance(out["rows"], list)
+		self.assertEqual(out["filters"]["company"], self.company)
+		self.assertFalse(out["truncated"])
+		self.assertEqual(out["total_rows"], len(out["rows"]))
+
+	def test_run_report_truncates_rows_over_cap_and_reports_total(self):
+		# max_batch_size=5 from setUp; fake more rows than that come back from
+		# the report engine itself so this isolates run_report()'s own
+		# truncation logic from needing real GL Entry fixtures to exceed it.
+		fake_result = {"columns": ["name"], "result": [{"name": f"Row {i}"} for i in range(10)]}
+		with mock.patch("erpnext.ai.tools.reports.run_query_report", return_value=fake_result):
+			out = reports.run_report(
+				"General Ledger", filters={"from_date": "2020-01-01", "to_date": "2030-01-01"}
+			)
+		self.assertEqual(len(out["rows"]), 5)
+		self.assertTrue(out["truncated"])
+		self.assertEqual(out["total_rows"], 10)
+
+	def test_run_report_rejects_non_dict_filters(self):
+		# Frappe's list filter form; dict(filters or {}) would otherwise raise a
+		# bare ValueError here, escaping this security-adjacent function uncaught.
+		with self.assertRaises(registry.ToolError):
+			reports.run_report("General Ledger", filters=[["company", "=", self.company]])
+
+	def test_run_report_rejects_out_of_scope_company(self):
+		with self.assertRaises(registry.ToolError):
+			reports.run_report("General Ledger", filters={"company": "Nope Ltd"})
+
+	def test_multi_company_site_scopes_company_and_refuses_unscopable_paths(self):
+		other_company = self._make_second_company()
+		# AI Settings (see setUp) still binds only self.company -- other_company
+		# exists on the site but is out of this agent's bound_companies().
+
+		names = [row["name"] for row in documents.search_documents("Company", fields=["name"])]
+		self.assertIn(self.company, names)
+		self.assertNotIn(other_company, names)
+
+		with self.assertRaises(registry.ToolError):
+			documents.get_document("Company", other_company)
+
+		# Company-less doctypes stop being usable the instant a second Company
+		# exists -- nothing here can guarantee it won't mix the two entities.
+		with self.assertRaises(registry.ToolError):
+			scoping.assert_scopable("Currency")
+
+		with self.assertRaises(registry.ToolError):
+			reports.run_report("General Ledger")
 
 
 class TestMCPPermissionBoundary(IntegrationTestCase):
@@ -112,3 +257,41 @@ class TestMCPPermissionBoundary(IntegrationTestCase):
 		# The message must state refusal without revealing whether records exist.
 		self.assertIn("Not permitted", text)
 		self.assertNotIn("rows", text.lower())
+
+	def test_get_document_same_message_for_missing_and_unreadable_record(self):
+		from erpnext.ai import mcp
+
+		# Sales User (self.user_email's only role) has no read permission at
+		# all on Timesheet, so this is a genuinely existing-but-unreadable
+		# record, not just another "doesn't exist" case in disguise.
+		company = frappe.db.get_value("Company", {}, "name")
+		ts = frappe.get_doc({"doctype": "Timesheet", "company": company, "time_logs": [{"is_billable": 0}]})
+		ts.insert(ignore_permissions=True)
+
+		frappe.set_user(self.user_email)
+		missing = mcp.dispatch(
+			{
+				"jsonrpc": "2.0",
+				"id": 1,
+				"method": "tools/call",
+				"params": {
+					"name": "get_document",
+					"arguments": {"doctype": "Timesheet", "name": "TS-DOES-NOT-EXIST"},
+				},
+			}
+		)
+		unreadable = mcp.dispatch(
+			{
+				"jsonrpc": "2.0",
+				"id": 2,
+				"method": "tools/call",
+				"params": {"name": "get_document", "arguments": {"doctype": "Timesheet", "name": ts.name}},
+			}
+		)
+
+		missing_text = missing["result"]["content"][0]["text"]
+		unreadable_text = unreadable["result"]["content"][0]["text"]
+		self.assertTrue(missing["result"]["isError"])
+		self.assertTrue(unreadable["result"]["isError"])
+		self.assertEqual(missing_text, unreadable_text)
+		self.assertEqual(missing_text, frappe._("Not permitted for the current ERPNext user."))

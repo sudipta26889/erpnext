@@ -15,6 +15,22 @@ from erpnext.ai.registry import ToolError, clamp_limit, tool
 
 _NO_ARGS = {"type": "object", "properties": {}, "additionalProperties": False}
 
+# Doctypes counted by get_company_context() that carry no `company` field on
+# this schema, so there is nothing to scope the count by -- left as a
+# site-wide total rather than silently pretending to be scoped. Deliberate,
+# not an oversight: contrast with Sales Order / Sales Invoice below, which do
+# carry `company` and are scoped.
+_UNSCOPED_COUNT_DOCTYPES = frozenset({"Customer", "Supplier", "Item"})
+
+
+def _escape_like(text: str) -> str:
+	"""Escape LIKE metacharacters so `%`/`_` in user input can't act as wildcards.
+
+	PostgreSQL's default LIKE escape character is backslash, so this needs no
+	accompanying ESCAPE clause.
+	"""
+	return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
 
 @tool(
 	name="get_company_context",
@@ -32,7 +48,10 @@ def get_company_context() -> dict:
 		or frappe._dict()
 	)
 	fiscal_year = frappe.get_all(
-		"Fiscal Year", fields=["name", "year_start_date", "year_end_date"], order_by="year_start_date desc", limit=1
+		"Fiscal Year",
+		fields=["name", "year_start_date", "year_end_date"],
+		order_by="year_start_date desc",
+		limit=1,
 	)
 	roots = frappe.get_all(
 		"Account",
@@ -49,7 +68,11 @@ def get_company_context() -> dict:
 		"modules": frappe.get_all("Module Def", filters={"app_name": "erpnext"}, pluck="name"),
 		"accessible_companies": scoping.bound_companies(),
 		"counts": {
-			doctype: frappe.db.count(doctype)
+			doctype: (
+				frappe.db.count(doctype)
+				if doctype in _UNSCOPED_COUNT_DOCTYPES
+				else frappe.db.count(doctype, {"company": ["in", scoping.bound_companies()]})
+			)
 			for doctype in ("Customer", "Supplier", "Item", "Sales Order", "Sales Invoice")
 		},
 	}
@@ -77,13 +100,20 @@ def search_doctypes(query: str, module: str | None = None, limit: int | None = N
 	if module:
 		filters["module"] = module
 
+	pattern = f"%{_escape_like(query)}%"
 	rows = frappe.get_all(
 		"DocType",
 		filters=filters,
-		or_filters={"name": ["like", f"%{query}%"], "description": ["like", f"%{query}%"]},
+		or_filters={"name": ["like", pattern], "description": ["like", pattern]},
 		fields=["name", "module", "description", "issingle", "is_submittable"],
 		limit=clamp_limit(limit),
 	)
+	# frappe.get_all() reads with ignore_permissions=True, so filter what gets
+	# advertised down to what the caller can actually read -- discovery must
+	# never surface a doctype the caller has no access to. frappe.has_permission()
+	# defaults `throw` to False, which it forwards as `print_logs=False`, so a
+	# denial here doesn't also msgprint into the response's _server_messages.
+	rows = [row for row in rows if frappe.has_permission(row.name, "read")]
 	locations = workspace_map()
 	return [
 		{
@@ -115,6 +145,12 @@ def search_doctypes(query: str, module: str | None = None, limit: int | None = N
 )
 def describe_doctype(doctype: str) -> dict:
 	if not frappe.db.exists("DocType", doctype):
+		raise ToolError(_("No such doctype: {0}").format(doctype))
+
+	# Same message as the nonexistent-doctype branch above, deliberately: this
+	# tool must not be usable to enumerate doctypes the caller cannot see by
+	# distinguishing "doesn't exist" from "exists but you can't read it".
+	if not frappe.has_permission(doctype, "read"):
 		raise ToolError(_("No such doctype: {0}").format(doctype))
 
 	meta = frappe.get_meta(doctype)
@@ -167,12 +203,16 @@ def list_reports(module: str | None = None, limit: int | None = None) -> list[di
 	filters = {"disabled": 0}
 	if module:
 		filters["module"] = module
-	return frappe.get_all(
+	rows = frappe.get_all(
 		"Report",
 		filters=filters,
 		fields=["name", "module", "report_type", "ref_doctype"],
 		limit=clamp_limit(limit),
 	)
+	# frappe.get_all() reads with ignore_permissions=True, so filter what gets
+	# advertised down to reports the caller can actually read -- discovery
+	# must never advertise a report run_report would then refuse to run.
+	return [row for row in rows if frappe.has_permission("Report", "read", row.name)]
 
 
 @tool(

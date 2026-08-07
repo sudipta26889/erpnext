@@ -11,7 +11,11 @@ a `company` field — see `has_company_field()`. A company-less doctype is not
 touched by anything here: `scope_filters()` simply returns its filters
 unchanged, so any doctype whose documents can reveal another company's data
 without a `company` field of its own must be explicitly vetted before it is
-exposed to a tool. See `assert_doctype_scopable()`.
+exposed to a tool. See `assert_doctype_scopable()` for the unconditional
+deny-list of such doctypes, and `assert_scopable()` for the complementary,
+conditional guard: it lets a company-less-but-otherwise-harmless doctype
+through on today's single-company site, and refuses it the moment a second
+Company exists, since it can no longer be restricted to the bound entity.
 """
 
 from typing import Any
@@ -98,6 +102,40 @@ def assert_company_allowed(company: str) -> None:
 
 def has_company_field(doctype: str) -> bool:
 	return bool(frappe.get_meta(doctype).get_field("company"))
+
+
+def is_multi_company_site() -> bool:
+	"""True once a second Company exists.
+
+	Company scoping below relies on either a `company` field to filter on, or
+	(for `Company` itself) identity. A doctype with neither is safe to expose
+	unscoped only because this site currently has one Company -- nothing to
+	leak between. `assert_scopable()` uses this to fail closed the moment
+	that stops being true, instead of silently leaking across entities.
+	"""
+	return frappe.db.count("Company") > 1
+
+
+def assert_scopable(doctype: str) -> None:
+	"""Raise if `doctype` cannot be restricted to the bound company/companies.
+
+	A doctype with a `company` field is scoped by `scope_filters()`. `Company`
+	itself carries no `company` field but is scoped by identity instead (see
+	`erpnext/ai/tools/documents.py`), so it is always scopable. Everything
+	else with no `company` field cannot be restricted at all -- fine on the
+	single-company site this guarantee otherwise assumes throughout this
+	module, but a leak waiting to happen the moment a second Company exists.
+	"""
+	if doctype == "Company" or has_company_field(doctype):
+		return
+	if is_multi_company_site():
+		raise ToolError(
+			_(
+				"{0} carries no `company` field, so it cannot be restricted to the bound "
+				"entity. This site has more than one Company, so this doctype is not "
+				"available to this agent."
+			).format(doctype)
+		)
 
 
 def _reject_company_filter(explicit: Any) -> None:
