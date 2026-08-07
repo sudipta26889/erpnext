@@ -124,9 +124,9 @@ def assert_value_within_cap(value: float | str | None, label: str) -> None:
 		# A caller whose monetary lookup came back None must not be waved through
 		# uncapped just because `float(None or 0)` used to coerce to 0.
 		raise ToolError(
-			_("{0} value could not be determined, so the configured AI limit of {1} cannot be enforced.").format(
-				label, cap
-			)
+			_(
+				"{0} value could not be determined, so the configured AI limit of {1} cannot be enforced."
+			).format(label, cap)
 		)
 	try:
 		numeric_value = float(value)
@@ -136,14 +136,12 @@ def assert_value_within_cap(value: float | str | None, label: str) -> None:
 		raise ToolError(_("{0} value {1!r} is not a number.").format(label, value)) from None
 	if numeric_value > cap:
 		# Refuse rather than trim: a silently shrunk document is worse than an error.
-		raise ToolError(
-			_("{0} value {1} exceeds the configured AI limit of {2}.").format(label, value, cap)
-		)
+		raise ToolError(_("{0} value {1} exceeds the configured AI limit of {2}.").format(label, value, cap))
 
 
 def _load_tool_modules() -> None:
 	"""Import tool modules so their decorators run. Idempotent."""
-	from erpnext.ai.tools import discovery, documents, methods, reports  # noqa: F401
+	from erpnext.ai.tools import discovery, documents, methods, reports
 
 
 @tool(

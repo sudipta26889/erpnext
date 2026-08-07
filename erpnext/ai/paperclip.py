@@ -30,7 +30,9 @@ class PaperclipClient:
 		self.company_id = company_id
 		self.agent_id = agent_id
 
-	def request(self, method: str, path: str, json_body: dict | None = None, params: dict | None = None) -> dict:
+	def request(
+		self, method: str, path: str, json_body: dict | None = None, params: dict | None = None
+	) -> dict:
 		url = f"{self.base_url}/{path.lstrip('/')}"
 		response = requests.request(
 			method,
@@ -146,9 +148,7 @@ def list_approvals() -> dict:
 	assert_ai_user()
 	client = get_client()
 	return {
-		"action_requests": client.request(
-			"GET", f"/api/companies/{client.company_id}/tools/action-requests"
-		)
+		"action_requests": client.request("GET", f"/api/companies/{client.company_id}/tools/action-requests")
 	}
 
 

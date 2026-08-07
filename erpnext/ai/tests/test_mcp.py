@@ -145,8 +145,7 @@ class TestMCP(IntegrationTestCase):
 
 	def test_tools_call_returns_text_content(self):
 		out = mcp.dispatch(
-			{"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-			 "params": {"name": "ping", "arguments": {}}}
+			{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "ping", "arguments": {}}}
 		)
 		payload = json.loads(out["result"]["content"][0]["text"])
 		self.assertTrue(payload["pong"])
@@ -154,8 +153,7 @@ class TestMCP(IntegrationTestCase):
 
 	def test_tool_error_is_reported_as_content_not_transport_error(self):
 		out = mcp.dispatch(
-			{"jsonrpc": "2.0", "id": 4, "method": "tools/call",
-			 "params": {"name": "nope", "arguments": {}}}
+			{"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "nope", "arguments": {}}}
 		)
 		# MCP convention: tool failures are results with isError, so the model can
 		# read and adapt rather than the transport blowing up.
@@ -212,8 +210,7 @@ class TestMCP(IntegrationTestCase):
 		# try/except, which turns the same ToolError into a result+isError
 		# instead of a transport-level error.
 		out = mcp.dispatch(
-			{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-			 "params": {"name": "ping", "arguments": {}}}
+			{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "ping", "arguments": {}}}
 		)
 		self.assertTrue(out["result"]["isError"])
 
@@ -224,8 +221,12 @@ class TestMCP(IntegrationTestCase):
 		# through to the verbatim-message branch: that would let a caller
 		# distinguish "hidden" from "missing" records by their error text.
 		out = mcp.dispatch(
-			{"jsonrpc": "2.0", "id": 7, "method": "tools/call",
-			 "params": {"name": "_test_raises_does_not_exist", "arguments": {}}}
+			{
+				"jsonrpc": "2.0",
+				"id": 7,
+				"method": "tools/call",
+				"params": {"name": "_test_raises_does_not_exist", "arguments": {}},
+			}
 		)
 		text = out["result"]["content"][0]["text"]
 		self.assertTrue(out["result"]["isError"])
@@ -234,8 +235,12 @@ class TestMCP(IntegrationTestCase):
 
 	def test_validation_error_is_returned_verbatim(self):
 		out = mcp.dispatch(
-			{"jsonrpc": "2.0", "id": 8, "method": "tools/call",
-			 "params": {"name": "_test_raises_validation", "arguments": {}}}
+			{
+				"jsonrpc": "2.0",
+				"id": 8,
+				"method": "tools/call",
+				"params": {"name": "_test_raises_validation", "arguments": {}},
+			}
 		)
 		text = out["result"]["content"][0]["text"]
 		self.assertTrue(out["result"]["isError"])
@@ -243,16 +248,18 @@ class TestMCP(IntegrationTestCase):
 
 	def test_unexpected_error_returns_generic_message_not_original_text(self):
 		out = mcp.dispatch(
-			{"jsonrpc": "2.0", "id": 9, "method": "tools/call",
-			 "params": {"name": "_test_raises_unexpected", "arguments": {}}}
+			{
+				"jsonrpc": "2.0",
+				"id": 9,
+				"method": "tools/call",
+				"params": {"name": "_test_raises_unexpected", "arguments": {}},
+			}
 		)
 		text = out["result"]["content"][0]["text"]
 		self.assertTrue(out["result"]["isError"])
 		self.assertNotIn("tabSales Invoice", text)
 		self.assertNotIn("leaked", text)
-		self.assertEqual(
-			text, frappe._("An internal error occurred in ERPNext; it has been logged.")
-		)
+		self.assertEqual(text, frappe._("An internal error occurred in ERPNext; it has been logged."))
 
 	# -- message_log: frappe.throw()'s real path, not a direct raise --------
 	#
@@ -264,8 +271,12 @@ class TestMCP(IntegrationTestCase):
 
 	def test_does_not_exist_error_via_throw_returns_vague_message_and_clears_log(self):
 		out = mcp.dispatch(
-			{"jsonrpc": "2.0", "id": 10, "method": "tools/call",
-			 "params": {"name": "_test_throws_does_not_exist", "arguments": {}}}
+			{
+				"jsonrpc": "2.0",
+				"id": 10,
+				"method": "tools/call",
+				"params": {"name": "_test_throws_does_not_exist", "arguments": {}},
+			}
 		)
 		text = out["result"]["content"][0]["text"]
 		self.assertTrue(out["result"]["isError"])
@@ -275,8 +286,12 @@ class TestMCP(IntegrationTestCase):
 
 	def test_permission_error_via_throw_returns_vague_message_and_clears_log(self):
 		out = mcp.dispatch(
-			{"jsonrpc": "2.0", "id": 11, "method": "tools/call",
-			 "params": {"name": "_test_throws_permission_error", "arguments": {}}}
+			{
+				"jsonrpc": "2.0",
+				"id": 11,
+				"method": "tools/call",
+				"params": {"name": "_test_throws_permission_error", "arguments": {}},
+			}
 		)
 		text = out["result"]["content"][0]["text"]
 		self.assertTrue(out["result"]["isError"])
@@ -286,16 +301,18 @@ class TestMCP(IntegrationTestCase):
 
 	def test_unexpected_error_via_throw_returns_generic_message_and_clears_log(self):
 		out = mcp.dispatch(
-			{"jsonrpc": "2.0", "id": 12, "method": "tools/call",
-			 "params": {"name": "_test_throws_unexpected", "arguments": {}}}
+			{
+				"jsonrpc": "2.0",
+				"id": 12,
+				"method": "tools/call",
+				"params": {"name": "_test_throws_unexpected", "arguments": {}},
+			}
 		)
 		text = out["result"]["content"][0]["text"]
 		self.assertTrue(out["result"]["isError"])
 		self.assertNotIn("tabSales Invoice", text)
 		self.assertNotIn("leaked", text)
-		self.assertEqual(
-			text, frappe._("An internal error occurred in ERPNext; it has been logged.")
-		)
+		self.assertEqual(text, frappe._("An internal error occurred in ERPNext; it has been logged."))
 		self.assertEqual(frappe.local.message_log, [])
 
 	# -- handle()-level: the real HTTP-facing entrypoint -------------------
@@ -324,8 +341,7 @@ class TestMCP(IntegrationTestCase):
 
 	def test_handle_tools_call_ping_succeeds(self):
 		body = json.dumps(
-			{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-			 "params": {"name": "ping", "arguments": {}}}
+			{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "ping", "arguments": {}}}
 		)
 		out = self._handle(body)
 		payload = json.loads(out["result"]["content"][0]["text"])

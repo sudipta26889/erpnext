@@ -196,9 +196,7 @@ def _route(request_id: Any, method: str, params: dict) -> dict:
 			_log_deferred("ERPNext AI tool failure")
 			return _result(
 				request_id,
-				_text_content(
-					_("An internal error occurred in ERPNext; it has been logged."), is_error=True
-				),
+				_text_content(_("An internal error occurred in ERPNext; it has been logged."), is_error=True),
 			)
 
 	return _error(request_id, METHOD_NOT_FOUND, _("Unknown method: {0}").format(method))
