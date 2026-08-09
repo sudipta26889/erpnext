@@ -1,0 +1,20 @@
+{
+ "actions": [],
+ "creation": "2026-08-06 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": ["company"],
+ "fields": [
+  {"fieldname": "company", "fieldtype": "Link", "label": "Company", "options": "Company", "in_list_view": 1, "reqd": 1}
+ ],
+ "istable": 1,
+ "modified": "2026-08-06 12:00:00.000000",
+ "module": "AI",
+ "name": "AI Company Item",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}

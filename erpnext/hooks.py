@@ -67,6 +67,16 @@ setup_wizard_stages = "erpnext.setup.setup_wizard.setup_wizard.get_setup_stages"
 
 after_install = "erpnext.setup.install.after_install"
 
+# IMPORTANT 7: the tabPatch Log means patches.txt's own
+# normalize_deprecated_timezone entry runs exactly once, ever -- India setup
+# rewriting System Settings.time_zone back to the deprecated `Asia/Calcutta`
+# alias (the recorded root cause) happens *after* that, on every later
+# migrate, so only calling it here as well makes it actually self-healing.
+# execute() is idempotent (a no-op, silently, whenever the current value
+# isn't a known deprecated alias), so running it unconditionally on every
+# migrate is safe.
+after_migrate = ["erpnext.patches.v16_0.normalize_deprecated_timezone.execute"]
+
 after_app_install = "erpnext.setup.install.after_app_install"
 after_app_uninstall = "erpnext.setup.install.after_app_uninstall"
 
