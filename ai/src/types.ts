@@ -9,7 +9,7 @@ export type Comment = {
   createdAt: string;
 };
 
-export const CONCIERGE = 'board-concierge';
+export const CONCIERGE = "board-concierge";
 
 export type BoardThread = {
   issue_id: string | null;
@@ -33,8 +33,15 @@ export type ActionRequest = {
   createdAt?: string;
 };
 
+export type RunState = {
+  id: string;
+  status: string;
+  createdAt?: string;
+  agentName?: string;
+};
+
 export type Thread = {
   issue_id: string;
   comments: Comment[];
-  live_runs: Array<{ id: string; status: string }>;
+  live_runs: RunState[];
 };

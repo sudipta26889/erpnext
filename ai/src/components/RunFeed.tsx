@@ -1,20 +1,20 @@
-import { useEffect, useState } from 'react';
-import { api } from '../api';
-import type { RunEvent } from '../types';
+import { useEffect, useState } from "react";
+import { api } from "../api";
+import type { RunEvent } from "../types";
 
 // Runs expose no SSE, so we poll the cursor-based event feed. Showing the agent's
 // actual steps is what makes a 40-second reply read as work rather than a hang.
 const LABELS: Record<string, string> = {
-  'adapter.invoke': 'Thinking',
-  status: 'Status',
-  chunk: '',
-  call_completed: 'Used a tool',
-  call_denied: 'Tool call denied',
-  call_failed: 'Tool call failed',
-  approval_requested: 'Waiting for your approval',
-  approval_resolved: 'Approval resolved',
-  rate_limited: 'Rate limited',
-  error: 'Error',
+  "adapter.invoke": "Thinking",
+  status: "Status",
+  chunk: "",
+  call_completed: "Used a tool",
+  call_denied: "Tool call denied",
+  call_failed: "Tool call failed",
+  approval_requested: "Waiting for your approval",
+  approval_resolved: "Approval resolved",
+  rate_limited: "Rate limited",
+  error: "Error",
 };
 
 // A run that keeps returning events without any of them carrying a seq past
@@ -38,7 +38,9 @@ export function RunFeed({ runId }: { runId: string }) {
         const { events: fresh } = await api.events(runId, seq);
         if (fresh?.length) {
           setEvents((prev) => [...prev, ...fresh]);
-          const seqs = fresh.map((e) => e.seq).filter((s): s is number => Number.isFinite(s));
+          const seqs = fresh
+            .map((e) => e.seq)
+            .filter((s): s is number => Number.isFinite(s));
           const nextSeq = seqs.length ? Math.max(seq, ...seqs) : seq;
           if (nextSeq > seq) {
             seq = nextSeq;
@@ -66,17 +68,30 @@ export function RunFeed({ runId }: { runId: string }) {
     };
   }, [runId]);
 
-  if (!events.length) return <div className="text-muted">Waking the CEO…</div>;
+  // "no events yet" is not "waking": by the time this renders the run is already
+  // running. Saying "waking" here is what made a run that never started look
+  // identical to one that was working -- for hours.
+  if (!events.length)
+    return (
+      <div className="ai-status">
+        <span className="ai-dot" />
+        CEO is working — no steps reported yet.
+      </div>
+    );
 
   return (
     <ul className="ai-run-feed">
       {events.map((e, i) => (
         <li key={`${e.seq}-${i}`}>
           <strong>{LABELS[e.eventType] ?? e.eventType}</strong>
-          {e.message ? ` — ${e.message}` : ''}
+          {e.message ? ` — ${e.message}` : ""}
         </li>
       ))}
-      {stalled ? <li className="text-muted">Feed stalled — refresh to check for updates.</li> : null}
+      {stalled ? (
+        <li className="ai-status">
+          Feed stalled — refresh to check for updates.
+        </li>
+      ) : null}
     </ul>
   );
 }

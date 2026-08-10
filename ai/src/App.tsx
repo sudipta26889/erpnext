@@ -141,6 +141,11 @@ export function App() {
   const raw = mode === "board" ? board?.comments : thread?.comments;
   const comments = raw === undefined ? null : Array.isArray(raw) ? raw : [];
   const activeRun = mode === "ceo" ? thread?.live_runs?.[0] : undefined;
+  const queuedSince = activeRun?.createdAt
+    ? new Date(activeRun.createdAt).toLocaleTimeString(undefined, {
+        timeStyle: "short",
+      })
+    : "";
 
   return (
     <div className="ai-app" ref={app}>
@@ -177,7 +182,16 @@ export function App() {
         <Thread comments={comments} />
       )}
 
-      {activeRun ? (
+      {activeRun && activeRun.status === "queued" ? (
+        // A queued run has no events and may sit for a long time: the agent runs
+        // one at a time, and this instance has its scheduler off, so the queue
+        // only advances when the runner frees up. Say that, rather than animating
+        // a spinner at someone for an hour.
+        <div className="ai-status">
+          CEO run queued{queuedSince ? ` since ${queuedSince}` : ""} — the agent
+          is busy with another run and will pick this up when it frees.
+        </div>
+      ) : activeRun ? (
         <RunFeed runId={activeRun.id} />
       ) : sending ? (
         <div className="ai-status">
