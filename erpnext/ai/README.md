@@ -144,6 +144,25 @@ refuses outright, rather than silently returning unscoped data. Single-company
 sites get full capability; multi-company sites lose report access and access
 to a handful of company-less doctypes until those are individually vetted.
 
+## Deploying to production
+
+The image is built from this repo over a git daemon and tagged `main-<sha>`; the
+full procedure (bare clone, bridge-only daemon, `--build-arg CACHE_BUST=...`,
+bump `CUSTOM_TAG`) is in `.superpowers/sdd/prod-deploy-report.md`. Two things
+about *this* module specifically:
+
+- **`--build-arg CACHE_BUST=<something-new>` is mandatory.** The layer that runs
+  `bench init` mounts `apps.json` as a build secret, and secret content is not
+  part of the cache key -- without a changed CACHE_BUST the build exits 0 having
+  rebuilt nothing, and you deploy the previous commit believing otherwise.
+- **Run `bench migrate` twice** (or `bench clear-cache` first). Observed on the
+  2026-08-10 deploy: the first migrate after an image upgrade that introduces a
+  new module created the `AI` Module Def but skipped every doctype under it --
+  `AI Settings` did not exist, and the only symptom was
+  `No module named 'frappe.core.doctype.ai_settings'` when something touched it,
+  which reads like a missing app rather than an unsynced doctype. The second
+  migrate synced all three doctypes with no other change.
+
 ## Deferred to later specs
 
 Tracked in the roadmap, deliberately not built here: the pgvector RAG index
