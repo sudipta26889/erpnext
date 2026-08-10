@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { RunFeed } from "./components/RunFeed";
@@ -27,6 +27,26 @@ export function App() {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const dock = useRef<HTMLDivElement>(null);
+  const app = useRef<HTMLDivElement>(null);
+  const [dockHeight, setDockHeight] = useState(0);
+
+  // The dock is sticky, so the thread scrolls *under* it: without reserving its
+  // height the newest turn ends up hidden behind the approvals -- the same
+  // "you cannot see the thing that matters" failure the dock exists to fix.
+  // Its height changes with the number of approvals, so measure rather than guess.
+  useEffect(() => {
+    const el = dock.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      app.current?.style.setProperty(
+        "--ai-dock-height",
+        `${el.offsetHeight}px`,
+      );
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  });
 
   // get_boot_info() tells us whether AI is enabled/configured *before* we
   // ever call get_thread()/list_approvals() -- those 500 against an
@@ -74,6 +94,18 @@ export function App() {
     return () => window.clearInterval(id);
   }, [refresh, configured]);
 
+  const count =
+    (mode === "board" ? board?.comments : thread?.comments)?.length ?? 0;
+  const anchor = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // scrollIntoView, not window.scrollTo: the desk scrolls an inner container,
+    // so scrolling the window is a silent no-op and the thread opens at its
+    // oldest message -- which, on a months-long transcript, reads as "nothing
+    // happened here". The anchor carries scroll-margin-bottom equal to the dock
+    // height, so the newest turn lands above the approvals rather than under them.
+    anchor.current?.scrollIntoView?.({ block: "end" });
+  }, [count, dockHeight, mode]);
+
   const send = async () => {
     const message = draft.trim();
     if (!message) return;
@@ -111,7 +143,7 @@ export function App() {
   const activeRun = mode === "ceo" ? thread?.live_runs?.[0] : undefined;
 
   return (
-    <div className="ai-app">
+    <div className="ai-app" ref={app}>
       <div className="ai-modes">
         <div className="ai-segmented" role="group" aria-label="Who answers">
           <button
@@ -154,7 +186,9 @@ export function App() {
         </div>
       ) : null}
 
-      <div className="ai-dock">
+      <div className="ai-scroll-anchor" ref={anchor} />
+
+      <div className="ai-dock" ref={dock}>
         {approvals.length ? (
           <div className="ai-approvals">
             <div className="ai-approvals-head">
