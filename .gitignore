@@ -26,5 +26,3 @@ erpnext/www/banking.html
 prod-docker/.env
 prod-docker/backups/
 
-# AI SPA
-erpnext/public/ai

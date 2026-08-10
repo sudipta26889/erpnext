@@ -50,9 +50,16 @@ That is fifteen tools in total across `discovery` (5), `documents` (7), `reports
 
 1. Build the desk SPA: `yarn build:ai` (from the repo root). This installs
    the `ai/` frontend's dependencies and runs `vite build`, which outputs
-   `erpnext/public/ai/ai.bundle.js` -- `public/ai` is gitignored, so a fresh
-   checkout has no bundle until this runs, and the desk page will otherwise
-   fail to load with "AI bundle failed to load".
+   `erpnext/public/ai/ai.bundle.js`.
+
+   **That output is committed**, unlike every other built asset here. The
+   production image is built from this repo over git and its only asset step is
+   `bench build`, which is Frappe's esbuild over `public/js/*.bundle.js` -- it
+   knows nothing about `ai/`'s Vite build, so a gitignored bundle would simply
+   be missing in production and the tab would render "AI bundle failed to load".
+   Consequence: **any change under `ai/src/` must be followed by `yarn build:ai`
+   and the rebuilt bundle committed alongside it**, or production silently keeps
+   serving the previous UI.
 2. Fill `PAPERCLIP_*` and `ERPNEXT_MCP_URL` in `prod-docker/.env` (see
    `prod-docker/.env.example` for the full key set).
 3. Create an ERPNext API key/secret for the AI service user. Export them for
