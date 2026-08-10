@@ -93,6 +93,24 @@ This instance runs `deploymentMode: authenticated`, published at a public hostna
 
 **What was salvaged:** board chat's own design validates the approach this spec now takes — a *standing issue* plus comments as the conversation substrate. The desk tab does the same thing, assigned to the CEO, minus the shell spawn.
 
+### 2.1b Board chat: re-admitted as a second channel (2026-08-09)
+
+The deployment-mode objection was removed on the Paperclip side, not here: the route is patched to also admit an **instance admin** when `PAPERCLIP_BOARD_CHAT_ALLOW_INSTANCE_ADMIN=1`, so the endpoint now answers this instance's public hostname. Verified live on 2026-08-09 with the key already in `PAPERCLIP_BOARD_API_KEY` — `start → chunk → done exitCode 0`.
+
+The *first* objection above still stands and is why this is a second channel rather than a replacement: board chat is not the CEO, has none of the ERPNext tools, and raises no approvals. What it is, is **conversational** — one turn, in-request, ≤120s — which the comment-and-wake CEO channel structurally is not.
+
+So the desk tab now carries both, switched explicitly by the user:
+
+| | Board room | CEO |
+|---|---|---|
+| Substrate | Paperclip's own `Board Operations` issue — the same transcript the Conference Room UI shows | `ERPNext Operations`, assigned to the CEO agent |
+| Latency | in-request, ≤120s | a heartbeat run |
+| ERPNext tools / approvals | no | yes |
+
+Both sides of a board exchange are persisted as comments by Paperclip (concierge turns carry `authorUserId: "board-concierge"`), so the reply survives a dropped request — the tab's existing poll picks it up.
+
+**What did not change:** the endpoint still spawns `claude --dangerously-skip-permissions` on the Paperclip host, so reaching it *is* reaching a shell there. That is now gated by `assert_ai_user()` (§6.2's role gate) and nothing else — which is exactly the reason `allowed_roles` must stay tight. It is also why board chat gets no ERPNext MCP tools: an unrestricted agent holding them would break §6.1's invariant by construction.
+
 ### 2.3a The live GrihaTEK company (probed 2026-08-06 with an agent key)
 
 | Fact | Value |
