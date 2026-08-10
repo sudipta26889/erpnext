@@ -25,3 +25,4 @@ erpnext/public/banking
 erpnext/www/banking.html
 prod-docker/.env
 prod-docker/backups/
+
