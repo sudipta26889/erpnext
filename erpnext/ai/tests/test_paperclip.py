@@ -253,6 +253,41 @@ class TestPaperclip(IntegrationTestCase):
 					req.return_value.json.return_value = payload
 					self.assertEqual(paperclip.list_approvals(), {"action_requests": []})
 
+	def test_resolve_approval_sends_the_company_the_gateway_demands(self):
+		# The approve/decline bodies are `required: true` and must carry companyId;
+		# Paperclip answers `400 companyId is required` otherwise, which surfaced on
+		# the Approve button as a bare 417 with nothing in the Error Log.
+		with patch("erpnext.ai.paperclip.requests.request") as req:
+			req.return_value.status_code = 200
+			req.return_value.json.return_value = {}
+			out = paperclip.resolve_approval("ar-1", True)
+		self.assertEqual(req.call_args.kwargs["json"], {"companyId": "c-1"})
+		self.assertTrue(req.call_args.args[1].endswith("/api/tool-gateway/action-requests/ar-1/approve"))
+		self.assertEqual(out, {"id": "ar-1", "resolved": "approve"})
+
+	def test_resolve_approval_declines_through_the_decline_endpoint(self):
+		with patch("erpnext.ai.paperclip.requests.request") as req:
+			req.return_value.status_code = 200
+			req.return_value.json.return_value = {}
+			paperclip.resolve_approval("ar-1", False)
+		self.assertTrue(req.call_args.args[1].endswith("/ar-1/decline"))
+
+	def test_failure_detail_is_logged_outside_the_transaction(self):
+		# frappe.log_error inserts inside the request transaction, and every caller
+		# here throws immediately after -- which rolls the row back. Without the
+		# file logger the operator gets a sanitised message and an empty Error Log.
+		with patch("erpnext.ai.paperclip.frappe.logger") as logger:
+			with patch("erpnext.ai.paperclip.requests.request") as req:
+				req.return_value.status_code = 500
+				req.return_value.text = "the actual reason"
+				with self.assertRaises(frappe.ValidationError):
+					paperclip.list_approvals()
+		# assert_any_call, not assert_called_with: frappe.log_error() reaches for a
+		# logger of its own afterwards, so ours is not the last call.
+		logger.assert_any_call("erpnext.ai")
+		logged = " ".join(str(c.args[0]) for c in logger.return_value.error.call_args_list)
+		self.assertIn("the actual reason", logged)
+
 	def test_role_gate_blocks_users_without_an_allowed_role(self):
 		with patch("erpnext.ai.paperclip.frappe.get_roles", return_value=["Stock User"]):
 			self.assertRaises(frappe.PermissionError, paperclip.assert_ai_user)

@@ -1,0 +1,395 @@
+/*
+ * Built on Frappe's semantic design tokens (--text-color, --card-bg, ...) rather
+ * than literal colours: the desk redefines every one of them under
+ * [data-theme="dark"], so styling against the tokens themes both ways for free.
+ * Anything hard-coded here would look correct in exactly one theme.
+ */
+
+.ai-app {
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+	/* room for the sticky composer so the last turn is never hidden behind it */
+	padding-bottom: 1rem;
+	color: var(--text-color);
+}
+
+/* ---------- header / mode switch ---------- */
+
+.ai-modes {
+	/* Tucks under the desk's own sticky .page-head (z-index 6, height
+	   --page-head-height) instead of scrolling away or hiding behind it. */
+	position: sticky;
+	top: var(--page-head-height, 48px);
+	z-index: 5;
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.5rem 0;
+	background: var(--bg-color);
+}
+
+.ai-segmented {
+	display: inline-flex;
+	padding: 3px;
+	gap: 2px;
+	border-radius: var(--radius-md, 10px);
+	background: var(--control-bg);
+	border: 1px solid var(--border-color);
+}
+
+.ai-segmented button {
+	border: 0;
+	background: transparent;
+	color: var(--text-muted);
+	font-size: var(--text-sm, 0.75rem);
+	font-weight: 500;
+	padding: 0.3rem 0.75rem;
+	border-radius: var(--radius-sm, 6px);
+	cursor: pointer;
+}
+
+.ai-segmented button:hover {
+	color: var(--text-color);
+}
+
+.ai-segmented button[aria-pressed="true"] {
+	background: var(--fg-color);
+	color: var(--text-color);
+	box-shadow: var(--shadow-base);
+}
+
+.ai-mode-hint {
+	font-size: var(--text-sm, 0.75rem);
+	color: var(--text-light);
+}
+
+/* ---------- thread ---------- */
+
+.ai-thread {
+	display: flex;
+	flex-direction: column;
+	gap: 1rem;
+}
+
+.ai-turn {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	max-width: min(52rem, 100%);
+}
+
+.ai-turn-user {
+	align-self: flex-end;
+	align-items: flex-end;
+}
+
+.ai-turn-meta {
+	display: flex;
+	gap: 0.5rem;
+	align-items: baseline;
+	font-size: var(--text-xs, 0.7rem);
+	color: var(--text-light);
+}
+
+.ai-turn-author {
+	font-weight: 600;
+	color: var(--text-muted);
+}
+
+.ai-bubble {
+	padding: 0.6rem 0.9rem;
+	border-radius: var(--radius-md, 10px);
+	border: 1px solid var(--border-color);
+	background: var(--card-bg);
+	overflow-wrap: anywhere;
+}
+
+.ai-turn-user .ai-bubble {
+	background: var(--control-bg);
+	border-color: transparent;
+}
+
+/* Markdown inside a turn is chat, not a document: an agent that opens with an
+ * <h1> otherwise renders a banner three times the size of the conversation. */
+.ai-bubble > *:first-child {
+	margin-top: 0;
+}
+
+.ai-bubble > *:last-child {
+	margin-bottom: 0;
+}
+
+.ai-bubble h1,
+.ai-bubble h2,
+.ai-bubble h3,
+.ai-bubble h4 {
+	font-size: 1rem;
+	font-weight: 600;
+	margin: 0.9rem 0 0.35rem;
+	line-height: 1.35;
+}
+
+.ai-bubble h1 {
+	font-size: 1.05rem;
+}
+
+.ai-bubble p,
+.ai-bubble ul,
+.ai-bubble ol {
+	margin: 0 0 0.5rem;
+	line-height: 1.55;
+}
+
+.ai-bubble ul,
+.ai-bubble ol {
+	padding-left: 1.15rem;
+}
+
+.ai-bubble li {
+	margin-bottom: 0.2rem;
+}
+
+.ai-bubble code {
+	font-size: 0.85em;
+	padding: 0.1em 0.35em;
+	border-radius: var(--radius-sm, 4px);
+	background: var(--control-bg);
+}
+
+.ai-bubble pre {
+	padding: 0.6rem 0.75rem;
+	border-radius: var(--radius-sm, 4px);
+	background: var(--control-bg);
+	overflow-x: auto;
+}
+
+.ai-bubble pre code {
+	padding: 0;
+	background: none;
+}
+
+.ai-bubble table {
+	display: block;
+	overflow-x: auto;
+	border-collapse: collapse;
+	margin-bottom: 0.5rem;
+}
+
+.ai-bubble th,
+.ai-bubble td {
+	border: 1px solid var(--border-color);
+	padding: 0.3rem 0.5rem;
+	text-align: left;
+}
+
+.ai-bubble blockquote {
+	margin: 0 0 0.5rem;
+	padding-left: 0.75rem;
+	border-left: 2px solid var(--border-color);
+	color: var(--text-muted);
+}
+
+/* ---------- approvals ---------- */
+
+.ai-approval {
+	border: 1px solid var(--border-color);
+	border-left: 3px solid var(--yellow-400, #d9a800);
+	border-radius: var(--radius-md, 10px);
+	background: var(--card-bg);
+	padding: 0.75rem 0.9rem;
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+}
+
+.ai-approval-head {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+}
+
+.ai-approval-title {
+	font-weight: 600;
+	font-size: var(--text-md, 0.875rem);
+}
+
+.ai-approval-tool {
+	font-family: var(--font-stack-mono, monospace);
+	font-size: 0.8em;
+	color: var(--text-muted);
+}
+
+.ai-badge {
+	font-size: var(--text-xs, 0.7rem);
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+	padding: 0.1rem 0.4rem;
+	border-radius: var(--radius-sm, 4px);
+	background: var(--control-bg);
+	color: var(--text-muted);
+}
+
+.ai-badge-write {
+	background: var(--bg-amber, #fef3c7);
+	color: var(--text-on-amber, #8a5a00);
+}
+
+.ai-badge-delete,
+.ai-badge-admin {
+	background: var(--bg-red, #fee2e2);
+	color: var(--text-on-red, #a11f1f);
+}
+
+.ai-approval-args {
+	font-size: var(--text-sm, 0.75rem);
+}
+
+.ai-approval-args summary {
+	cursor: pointer;
+	color: var(--text-muted);
+}
+
+.ai-approval-args pre {
+	margin: 0.4rem 0 0;
+	padding: 0.6rem;
+	max-height: 16rem;
+	overflow: auto;
+	border-radius: var(--radius-sm, 4px);
+	background: var(--control-bg);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.ai-approval-actions {
+	display: flex;
+	gap: 0.5rem;
+}
+
+/* ---------- composer ---------- */
+
+/* Approvals and the composer ride together at the bottom of the viewport. An
+   approval rendered inline scrolls away under a long transcript -- and an
+   approval nobody sees is an approval nobody grants, which is the one failure
+   mode this whole feature exists to avoid. */
+.ai-dock {
+	position: sticky;
+	bottom: 0;
+	z-index: 4;
+	background: var(--bg-color);
+	border-top: 1px solid var(--border-color);
+	padding: 0.5rem 0.25rem 0.5rem;
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+}
+
+.ai-approvals {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+	max-height: 38vh;
+	overflow-y: auto;
+}
+
+.ai-approvals-head {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	font-size: var(--text-sm, 0.75rem);
+	font-weight: 600;
+	color: var(--text-muted);
+}
+
+.ai-composer {
+	display: flex;
+	gap: 0.5rem;
+	align-items: flex-end;
+}
+
+.ai-composer textarea {
+	flex: 1;
+	resize: vertical;
+	min-height: 2.75rem;
+	max-height: 12rem;
+	padding: 0.6rem 0.75rem;
+	border-radius: var(--radius-md, 10px);
+	border: 1px solid var(--border-color);
+	background: var(--control-bg);
+	color: var(--text-color);
+	font-family: inherit;
+	font-size: var(--text-md, 0.875rem);
+	line-height: 1.5;
+}
+
+.ai-composer textarea:focus {
+	outline: none;
+	border-color: var(--primary);
+	background: var(--fg-color);
+}
+
+.ai-composer-side {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 0.25rem;
+}
+
+.ai-composer-hint {
+	font-size: var(--text-xs, 0.7rem);
+	color: var(--text-light);
+	white-space: nowrap;
+}
+
+/* ---------- states ---------- */
+
+.ai-status {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	color: var(--text-muted);
+	font-size: var(--text-sm, 0.75rem);
+	padding: 0.25rem 0;
+}
+
+.ai-empty {
+	padding: 2rem 0;
+	text-align: center;
+	color: var(--text-light);
+}
+
+.ai-error {
+	padding: 0.75rem 0.9rem;
+	border-radius: var(--radius-md, 10px);
+	border: 1px solid var(--border-color);
+	border-left: 3px solid var(--red-500, #e24c4c);
+	background: var(--card-bg);
+	color: var(--text-color);
+}
+
+.ai-dot {
+	width: 0.4rem;
+	height: 0.4rem;
+	border-radius: 50%;
+	background: currentColor;
+	animation: ai-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes ai-pulse {
+	0%,
+	100% {
+		opacity: 0.25;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ai-dot {
+		animation: none;
+		opacity: 0.6;
+	}
+}

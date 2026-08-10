@@ -1,25 +1,30 @@
-import { useCallback, useEffect, useState } from 'react';
-import { api } from './api';
-import { ApprovalCard } from './components/ApprovalCard';
-import { RunFeed } from './components/RunFeed';
-import { Thread } from './components/Thread';
-import type { ActionRequest, BoardThread, Thread as ThreadType } from './types';
+import { useCallback, useEffect, useState } from "react";
+import { api } from "./api";
+import { ApprovalCard } from "./components/ApprovalCard";
+import { RunFeed } from "./components/RunFeed";
+import { Thread } from "./components/Thread";
+import type { ActionRequest, BoardThread, Thread as ThreadType } from "./types";
 
 type Boot = { enabled: boolean; company: string; agent_id: string };
 
 // Two channels, one tab. The board concierge answers in one turn, in-request --
 // that is the conversational one, so it is the default. The CEO agent instead
 // wakes on the comment and works with the ERPNext tools, which takes a run.
-type Mode = 'board' | 'ceo';
+type Mode = "board" | "ceo";
+
+const HINT: Record<Mode, string> = {
+  board: "Answers now. Knows the company, its issues and its agents.",
+  ceo: "Works the ERPNext tools and comes back for approvals. Replies as a run.",
+};
 
 export function App() {
   const [boot, setBoot] = useState<Boot | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
-  const [mode, setMode] = useState<Mode>('board');
+  const [mode, setMode] = useState<Mode>("board");
   const [thread, setThread] = useState<ThreadType | null>(null);
   const [board, setBoard] = useState<BoardThread | null>(null);
   const [approvals, setApprovals] = useState<ActionRequest[]>([]);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
 
@@ -48,10 +53,10 @@ export function App() {
   const refresh = useCallback(async () => {
     try {
       const [t, a] = await Promise.all([
-        mode === 'board' ? api.boardThread() : api.thread(),
+        mode === "board" ? api.boardThread() : api.thread(),
         api.approvals(),
       ]);
-      if (mode === 'board') setBoard(t as BoardThread);
+      if (mode === "board") setBoard(t as BoardThread);
       else setThread(t as ThreadType);
       // A non-array here used to throw inside render and unmount the whole tab,
       // which looks exactly like 'the page is broken' and says nothing.
@@ -72,12 +77,12 @@ export function App() {
   const send = async () => {
     const message = draft.trim();
     if (!message) return;
-    setDraft('');
+    setDraft("");
     setSending(true);
     try {
       // The board reply is persisted as a comment either way, so even if this
       // request dies (proxy timeout, closed tab) the next poll still shows it.
-      if (mode === 'board') await api.boardChat(message);
+      if (mode === "board") await api.boardChat(message);
       else await api.send(message);
       await refresh();
     } catch (e) {
@@ -87,71 +92,109 @@ export function App() {
     }
   };
 
-  if (bootError) return <div className="ai-error">Could not load AI status: {bootError}</div>;
-  if (!boot) return <div className="text-muted">Loading…</div>;
+  if (bootError)
+    return (
+      <div className="ai-error">Could not load AI status: {bootError}</div>
+    );
+  if (!boot) return <div className="ai-status">Loading…</div>;
   if (!configured) {
     return (
       <div className="ai-error">
-        ERPNext AI is not configured yet. Enable it and bind a Company and Agent ID in AI Settings.
+        ERPNext AI is not configured yet. Enable it and bind a Company and Agent
+        ID in AI Settings.
       </div>
     );
   }
 
-  if (error) return <div className="ai-error">Paperclip unavailable: {error}</div>;
-
-  const raw = mode === 'board' ? board?.comments : thread?.comments;
+  const raw = mode === "board" ? board?.comments : thread?.comments;
   const comments = raw === undefined ? null : Array.isArray(raw) ? raw : [];
-  if (!comments) return <div className="text-muted">Loading…</div>;
-
-  const activeRun = mode === 'ceo' ? thread?.live_runs?.[0] : undefined;
-  // Honest state: no run and no comments yet means idle, not "always on".
-  const idle = !activeRun && comments.length === 0 && !sending;
+  const activeRun = mode === "ceo" ? thread?.live_runs?.[0] : undefined;
 
   return (
     <div className="ai-app">
       <div className="ai-modes">
-        <button
-          className={`btn btn-sm ${mode === 'board' ? 'btn-primary' : 'btn-default'}`}
-          onClick={() => setMode('board')}
-        >
-          Board room
-        </button>
-        <button
-          className={`btn btn-sm ${mode === 'ceo' ? 'btn-primary' : 'btn-default'}`}
-          onClick={() => setMode('ceo')}
-        >
-          CEO
-        </button>
-      </div>
-      {idle ? (
-        <div className="text-muted">
-          {mode === 'board'
-            ? 'Ask the board room about the company, its issues and its agents.'
-            : 'Ask your CEO to act — it works the ERPNext tools and comes back for approvals.'}
+        <div className="ai-segmented" role="group" aria-label="Who answers">
+          <button
+            aria-pressed={mode === "board"}
+            onClick={() => setMode("board")}
+          >
+            Board room
+          </button>
+          <button aria-pressed={mode === "ceo"} onClick={() => setMode("ceo")}>
+            CEO
+          </button>
         </div>
+        <span className="ai-mode-hint">{HINT[mode]}</span>
+      </div>
+
+      {/* An error replaces the feed but never the composer: losing the input box
+          mid-conversation because one poll failed is its own bug. */}
+      {error ? (
+        <div className="ai-error">Paperclip unavailable: {error}</div>
       ) : null}
-      <Thread comments={comments} />
+
+      {comments === null ? (
+        <div className="ai-status">Loading…</div>
+      ) : comments.length === 0 && !sending ? (
+        <div className="ai-empty">
+          {mode === "board"
+            ? "Ask the board room about the company, its issues and its agents."
+            : "Ask your CEO to act — it works the ERPNext tools and comes back for approvals."}
+        </div>
+      ) : (
+        <Thread comments={comments} />
+      )}
+
       {activeRun ? (
         <RunFeed runId={activeRun.id} />
       ) : sending ? (
-        <div className="text-muted">{mode === 'board' ? 'Board room is thinking…' : 'Waking the CEO…'}</div>
+        <div className="ai-status">
+          <span className="ai-dot" />
+          {mode === "board" ? "Board room is thinking…" : "Waking the CEO…"}
+        </div>
       ) : null}
-      {approvals.map((r) => (
-        <ApprovalCard key={r.id} request={r} onResolved={refresh} />
-      ))}
-      <div className="ai-composer">
-        <textarea
-          value={draft}
-          rows={3}
-          placeholder={mode === 'board' ? 'Ask the board room…' : 'Ask your CEO…'}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send();
-          }}
-        />
-        <button className="btn btn-primary" disabled={sending} onClick={send}>
-          Send
-        </button>
+
+      <div className="ai-dock">
+        {approvals.length ? (
+          <div className="ai-approvals">
+            <div className="ai-approvals-head">
+              {approvals.length} approval{approvals.length === 1 ? "" : "s"}{" "}
+              waiting on you
+            </div>
+            {approvals.map((r) => (
+              <ApprovalCard key={r.id} request={r} onResolved={refresh} />
+            ))}
+          </div>
+        ) : null}
+
+        <div className="ai-composer">
+          <textarea
+            value={draft}
+            rows={2}
+            placeholder={
+              mode === "board" ? "Ask the board room…" : "Ask your CEO…"
+            }
+            disabled={sending}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter sends, Shift+Enter is a newline -- chat convention.
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+          />
+          <div className="ai-composer-side">
+            <button
+              className="btn btn-primary"
+              disabled={sending || !draft.trim()}
+              onClick={send}
+            >
+              Send
+            </button>
+            <span className="ai-composer-hint">Enter to send</span>
+          </div>
+        </div>
       </div>
     </div>
   );

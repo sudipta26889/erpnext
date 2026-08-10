@@ -33,6 +33,20 @@ class PaperclipError(Exception):
 	pass
 
 
+def _log(title: str, message: str) -> None:
+	"""Record failure detail somewhere it will actually survive.
+
+	`frappe.log_error` inserts a row in the current transaction, and every caller
+	here is about to `frappe.throw` -- which rolls that transaction back and takes
+	the row with it. The whole point of this module's error handling is that the
+	detail is kept server-side rather than shipped to the browser, so losing it
+	leaves nobody with the reason: a 417 on screen and an empty Error Log. The
+	file logger is not transactional, so it keeps the copy that matters.
+	"""
+	frappe.logger("erpnext.ai").error(f"{title}: {message}")
+	frappe.log_error(title=title, message=message)
+
+
 def _sanitize_paperclip_errors(fn):
 	"""Wrap a whitelisted Paperclip proxy so a PaperclipError never escapes to
 	the caller with the remote server's own words in it.
@@ -50,7 +64,7 @@ def _sanitize_paperclip_errors(fn):
 		try:
 			return fn(*args, **kwargs)
 		except PaperclipError as exc:
-			frappe.log_error(title="Paperclip request failed", message=str(exc))
+			_log("Paperclip request failed", str(exc))
 			frappe.throw(_("Paperclip is unavailable right now. Try again shortly."))
 
 	return wrapper
@@ -87,7 +101,7 @@ class PaperclipClient:
 			# DNS failure, refused connection, read timeout: without this the raw
 			# exception escapes as a 500 whose traceback line can carry the
 			# internal URL. Same rule as a non-2xx -- detail to the log only.
-			frappe.log_error(title="Paperclip request failed", message=f"{method} {path} -> {exc!r}")
+			_log("Paperclip request failed", f"{method} {path} -> {exc!r}")
 			raise PaperclipError(
 				_("Paperclip {0} {1} got no response. The detail has been logged.").format(method, path)
 			) from None
@@ -99,9 +113,9 @@ class PaperclipClient:
 			# response (Frappe echoes an uncaught exception's last traceback
 			# line into the response when traceback-in-response is enabled).
 			# Full detail (including the body) goes to the Error Log only.
-			frappe.log_error(
-				title="Paperclip request failed",
-				message=f"{method} {path} -> {response.status_code}\n\n{response.text[:2000]}",
+			_log(
+				"Paperclip request failed",
+				f"{method} {path} -> {response.status_code}\n\n{response.text[:2000]}",
 			)
 			raise PaperclipError(
 				_("Paperclip {0} {1} failed ({2}). The detail has been logged.").format(
@@ -161,9 +175,7 @@ class PaperclipClient:
 			elif kind == "error":
 				# The frame's message is the remote's own words -- log it, never
 				# surface it, exactly as for a non-2xx body.
-				frappe.log_error(
-					title="Paperclip board chat failed", message=str(event.get("message"))[:2000]
-				)
+				_log("Paperclip board chat failed", str(event.get("message"))[:2000])
 				raise PaperclipError(_("The board chat stream reported a failure. It has been logged."))
 			else:  # start / status / done
 				issue_id = event.get("issueId") or issue_id
@@ -377,6 +389,14 @@ def list_approvals() -> dict:
 @_sanitize_paperclip_errors
 def resolve_approval(action_request_id: str, approve: bool) -> dict:
 	assert_ai_user()
+	client = get_client()
 	verb = "approve" if approve else "decline"
-	get_client().request("POST", f"/api/tool-gateway/action-requests/{action_request_id}/{verb}")
+	# The body is `required: true` and must carry companyId -- without it Paperclip
+	# answers `400 companyId is required`, which reached the desk as a bare
+	# "417 EXPECTATION FAILED" on the Approve button.
+	client.request(
+		"POST",
+		f"/api/tool-gateway/action-requests/{action_request_id}/{verb}",
+		json_body={"companyId": client.company_id},
+	)
 	return {"id": action_request_id, "resolved": verb}

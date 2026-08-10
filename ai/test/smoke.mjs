@@ -11,7 +11,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
 
-const bundle = join(dirname(fileURLToPath(import.meta.url)), "../../erpnext/public/ai/ai.js");
+const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
+const bundle = join(root, "erpnext/public/ai/ai.js");
+
+// The desk page script is evaluated with `new Function`, so a syntax error there
+// takes the page down with a message that points at frappe's bundle, not at us.
+// (A dropped "//" on a comment continuation did exactly that.)
+const { execFileSync } = await import("node:child_process");
+execFileSync(process.execPath, ["--check", join(root, "erpnext/ai/page/ai_chat/ai_chat.js")]);
 
 const dom = new JSDOM('<!doctype html><html><body><div id="host"></div></body></html>', {
 	url: "http://erp.test/desk/ai-chat",

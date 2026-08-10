@@ -14,18 +14,20 @@ frappe.pages["ai-chat"].on_page_load = function (wrapper) {
 	const host = page.body?.length ? page.body : $(wrapper);
 	const container = $('<div class="erpnext-ai-root"></div>').appendTo(host)[0];
 
-	const bundle = "/assets/erpnext/ai/ai.js";
+	// Vite emits the stylesheet beside the script; frappe.require takes both and
+	// applies its own ?v= to each, so a deploy cannot serve new markup with old CSS.
+	const assets = ["/assets/erpnext/ai/ai.css", "/assets/erpnext/ai/ai.js"];
 
 	// The SPA is built as an IIFE exposing window.mountAI so it can live inside the
 	// desk shell — which is the whole point, since the AI entry is a rail icon and
 	// navigating away from the desk would lose the rail.
-	frappe.require(bundle, () => {
+	frappe.require(assets, () => {
 		if (!window.mountAI) {
 			// frappe.require resolves on error too, so this branch is also what a
 			// failed request looks like -- say so, instead of blaming the build.
 			container.innerText = __(
 				"AI bundle did not load from {0}. Reload with cache bypass (Ctrl/Cmd+Shift+R); if it persists, run: yarn build:ai",
-				[bundle]
+				[assets.join(", ")]
 			);
 			return;
 		}

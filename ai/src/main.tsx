@@ -1,6 +1,7 @@
 import { Component, StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
+import './styles.css';
 
 // A throw inside render unmounts the entire root: the tab goes blank with the
 // message only in the console, which is indistinguishable from "the bundle never
