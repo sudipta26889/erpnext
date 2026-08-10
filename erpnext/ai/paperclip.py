@@ -337,11 +337,40 @@ def get_run_events(run_id: str, after_seq: int = 0) -> dict:
 @frappe.whitelist()
 @_sanitize_paperclip_errors
 def list_approvals() -> dict:
+	"""Pending tool-gateway approvals, flattened.
+
+	Paperclip answers `{"actionRequests": [{"request": {...}, "toolName": ...}]}` --
+	an envelope, camelCased, with the id one level down. Handing that to the SPA
+	verbatim is what made the tab render *nothing*: `action_requests.map` on an
+	object throws during render, React unmounts the whole tree, and the pane goes
+	blank with no message. Normalise here, where the shape is known, and let the
+	frontend keep assuming a list of flat rows.
+	"""
 	assert_ai_user()
 	client = get_client()
-	return {
-		"action_requests": client.request("GET", f"/api/companies/{client.company_id}/tools/action-requests")
-	}
+	raw = client.request("GET", f"/api/companies/{client.company_id}/tools/action-requests")
+	rows = raw.get("actionRequests") if isinstance(raw, dict) else raw
+	if not isinstance(rows, list):
+		rows = []
+
+	requests = []
+	for row in rows:
+		if not isinstance(row, dict):
+			continue
+		req = row.get("request") or {}
+		requests.append(
+			{
+				"id": req.get("id"),
+				"toolName": row.get("toolTitle") or row.get("toolName"),
+				"application": row.get("applicationName"),
+				"risk": row.get("riskLevel"),
+				"status": req.get("status"),
+				"createdAt": req.get("createdAt"),
+				"summary": (req.get("canonicalArgumentsSummary") or {}).get("summary")
+				or req.get("previewMarkdown"),
+			}
+		)
+	return {"action_requests": [r for r in requests if r["id"]]}
 
 
 @frappe.whitelist(methods=["POST"])

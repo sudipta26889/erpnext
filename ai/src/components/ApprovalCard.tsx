@@ -19,8 +19,9 @@ export function ApprovalCard({ request, onResolved }: { request: ActionRequest; 
     <div className="ai-approval">
       <div className="ai-approval-title">
         Approval needed: <code>{request.toolName ?? 'tool call'}</code>
+        {request.risk ? <span className="ai-approval-risk"> ({request.risk})</span> : null}
       </div>
-      {request.summary ? <p>{request.summary}</p> : null}
+      {request.summary ? <pre className="ai-approval-summary">{request.summary}</pre> : null}
       <div className="ai-approval-actions">
         <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => resolve(true)}>
           Approve

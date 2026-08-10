@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build && node test/smoke.mjs",
+    "smoke": "node test/smoke.mjs"
   },
   "dependencies": {
     "react": "^19.2.7",
@@ -18,6 +19,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
     "typescript": "~5.9.3",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "jsdom": "^28.0.0"
   }
 }

@@ -215,6 +215,44 @@ class TestPaperclip(IntegrationTestCase):
 		self.assertEqual(len(out["comments"]), paperclip.MAX_THREAD_COMMENTS)
 		self.assertEqual(out["comments"][-1]["id"], "c-249")
 
+	def test_list_approvals_flattens_paperclips_envelope(self):
+		# Paperclip answers {"actionRequests": [{"request": {...}, "toolName": ...}]}.
+		# Passing that through verbatim put an object where the SPA does .map(),
+		# which throws during render and unmounts the whole tab -- a blank pane
+		# with the reason only in the browser console.
+		with patch("erpnext.ai.paperclip.requests.request") as req:
+			req.return_value.status_code = 200
+			req.return_value.json.return_value = {
+				"actionRequests": [
+					{
+						"request": {
+							"id": "ar-1",
+							"status": "pending",
+							"createdAt": "2026-08-10T00:00:00Z",
+							"canonicalArgumentsSummary": {"summary": '{"doctype": "Item"}'},
+						},
+						"toolName": "mcp.erpnext:erpnext-doc-update",
+						"riskLevel": "write",
+						"applicationName": "ERPNext",
+					}
+				]
+			}
+			out = paperclip.list_approvals()
+		self.assertIsInstance(out["action_requests"], list)
+		row = out["action_requests"][0]
+		self.assertEqual(row["id"], "ar-1")
+		self.assertEqual(row["risk"], "write")
+		self.assertEqual(row["toolName"], "mcp.erpnext:erpnext-doc-update")
+		self.assertIn("Item", row["summary"])
+
+	def test_list_approvals_survives_an_unexpected_shape(self):
+		for payload in ({"unexpected": "shape"}, [], {"actionRequests": None}):
+			with self.subTest(payload=payload):
+				with patch("erpnext.ai.paperclip.requests.request") as req:
+					req.return_value.status_code = 200
+					req.return_value.json.return_value = payload
+					self.assertEqual(paperclip.list_approvals(), {"action_requests": []})
+
 	def test_role_gate_blocks_users_without_an_allowed_role(self):
 		with patch("erpnext.ai.paperclip.frappe.get_roles", return_value=["Stock User"]):
 			self.assertRaises(frappe.PermissionError, paperclip.assert_ai_user)

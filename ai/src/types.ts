@@ -26,6 +26,9 @@ export type RunEvent = {
 export type ActionRequest = {
   id: string;
   toolName?: string;
+  application?: string;
+  risk?: string;
+  status?: string;
   summary?: string;
   createdAt?: string;
 };

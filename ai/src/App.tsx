@@ -53,7 +53,9 @@ export function App() {
       ]);
       if (mode === 'board') setBoard(t as BoardThread);
       else setThread(t as ThreadType);
-      setApprovals(a.action_requests ?? []);
+      // A non-array here used to throw inside render and unmount the whole tab,
+      // which looks exactly like 'the page is broken' and says nothing.
+      setApprovals(Array.isArray(a.action_requests) ? a.action_requests : []);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -97,7 +99,8 @@ export function App() {
 
   if (error) return <div className="ai-error">Paperclip unavailable: {error}</div>;
 
-  const comments = (mode === 'board' ? board?.comments : thread?.comments) ?? null;
+  const raw = mode === 'board' ? board?.comments : thread?.comments;
+  const comments = raw === undefined ? null : Array.isArray(raw) ? raw : [];
   if (!comments) return <div className="text-muted">Loading…</div>;
 
   const activeRun = mode === 'ceo' ? thread?.live_runs?.[0] : undefined;

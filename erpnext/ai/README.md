@@ -42,7 +42,7 @@ can be broken by configuration outside this repository.
 | `doctype/ai_idempotency_record/` | Backing store for `create_document`'s idempotency key, so a retried call reuses the original document instead of creating a duplicate |
 | `page/ai_chat/` | Desk page hosting the SPA at `/desk/ai-chat`; `ai_chat.py::get_boot_info` gates entry by `allowed_roles` |
 | `workspace/ai/` | The `AI` workspace entry linking to the page |
-| `ai/` (repo root) | React source for the desk SPA; `vite build` outputs an IIFE bundle to `erpnext/public/ai/ai.bundle.js`, loaded into the desk page via `frappe.require` |
+| `ai/` (repo root) | React source for the desk SPA; `vite build` outputs an IIFE bundle to `erpnext/public/ai/ai.js`, loaded into the desk page via `frappe.require` |
 
 That is fifteen tools in total across `discovery` (5), `documents` (7), `reports` (1), `methods` (1) and `ping` (registered directly in `registry.py`).
 
@@ -50,7 +50,7 @@ That is fifteen tools in total across `discovery` (5), `documents` (7), `reports
 
 1. Build the desk SPA: `yarn build:ai` (from the repo root). This installs
    the `ai/` frontend's dependencies and runs `vite build`, which outputs
-   `erpnext/public/ai/ai.bundle.js`.
+   `erpnext/public/ai/ai.js`.
 
    **That output is committed**, unlike every other built asset here. The
    production image is built from this repo over git and its only asset step is
