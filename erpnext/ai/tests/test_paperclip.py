@@ -105,6 +105,116 @@ class TestPaperclip(IntegrationTestCase):
 			paperclip.get_client().request("GET", "/api/health")
 		self.assertEqual(req.call_args.args[1], "https://paperclip.example.com/api/health")
 
+	def test_connection_failure_never_escapes_as_a_raw_requests_error(self):
+		# A refused connection or read timeout must land on the same sanitised
+		# path as a non-2xx: raw RequestExceptions carry the internal URL and
+		# would reach the HTTP response through the traceback.
+		import requests as requests_module
+
+		with patch(
+			"erpnext.ai.paperclip.requests.request",
+			side_effect=requests_module.ConnectionError("http://internal-host:3100 refused"),
+		):
+			with self.assertRaises(paperclip.PaperclipError) as ctx:
+				paperclip.get_client().health()
+		self.assertNotIn("internal-host", str(ctx.exception))
+
+	def _sse(self, *frames: str):
+		"""A mocked streaming response yielding raw SSE lines."""
+		req = patch("erpnext.ai.paperclip.requests.request").start()
+		self.addCleanup(patch.stopall)
+		req.return_value.status_code = 200
+		req.return_value.iter_lines.return_value = iter(frames)
+		return req
+
+	def test_board_chat_joins_the_stream_into_one_answer(self):
+		req = self._sse(
+			'data: {"type":"start","issueId":"i-9"}',
+			"",
+			'data: {"type":"chunk","text":"BOARD "}',
+			'data: {"type":"chunk","text":"CHAT OK"}',
+			'data: {"type":"done","issueId":"i-9","exitCode":0,"timedOut":false}',
+		)
+		out = paperclip.get_client().chat("hi")
+		self.assertEqual(out, {"issue_id": "i-9", "answer": "BOARD CHAT OK", "timed_out": False})
+		self.assertEqual(req.call_args.args[1], "https://paperclip.example.com/api/board/chat/stream")
+		self.assertEqual(req.call_args.kwargs["json"], {"companyId": "c-1", "message": "hi"})
+		self.assertTrue(req.call_args.kwargs["stream"])
+
+	def test_board_chat_reports_a_server_side_timeout(self):
+		self._sse(
+			'data: {"type":"chunk","text":"partial"}',
+			'data: {"type":"done","issueId":"i-9","exitCode":0,"timedOut":true}',
+		)
+		out = paperclip.get_client().chat("hi")
+		self.assertTrue(out["timed_out"])
+		self.assertEqual(out["answer"], "partial")
+
+	def test_board_chat_error_frame_does_not_echo_the_remote_message(self):
+		self._sse('data: {"type":"error","message":"leaked internal secret xyz"}')
+		with self.assertRaises(paperclip.PaperclipError) as ctx:
+			paperclip.get_client().chat("hi")
+		self.assertNotIn("leaked internal secret xyz", str(ctx.exception))
+
+	def test_board_chat_ignores_frames_it_cannot_parse(self):
+		# Heartbeat/comment lines and half-written frames must not take the
+		# whole answer down.
+		self._sse(
+			": keepalive",
+			"data: not-json",
+			'data: {"type":"chunk","text":"ok"}',
+			'data: {"type":"done","issueId":"i-9"}',
+		)
+		self.assertEqual(paperclip.get_client().chat("hi")["answer"], "ok")
+
+	def test_board_chat_anchors_on_a_task_when_given_one(self):
+		req = self._sse('data: {"type":"done","issueId":"t-1"}')
+		paperclip.get_client().chat("hi", task_id="t-1")
+		self.assertEqual(req.call_args.kwargs["json"]["taskId"], "t-1")
+
+	def test_board_chat_is_post_only(self):
+		# It spawns an unrestricted agent process on the Paperclip host; that
+		# must not be reachable through a CSRF-exempt GET.
+		self.assertEqual(
+			frappe.allowed_http_methods_for_whitelisted_func.get(paperclip.board_chat), ("POST",)
+		)
+
+	def test_get_board_thread_is_empty_before_the_first_chat(self):
+		with patch("erpnext.ai.paperclip.requests.request") as req:
+			req.return_value.status_code = 200
+			req.return_value.json.return_value = []
+			out = paperclip.get_board_thread()
+		self.assertEqual(out, {"issue_id": None, "comments": []})
+
+	def test_get_board_thread_matches_the_title_exactly(self):
+		# Paperclip's `q` is fuzzy: it returns near-misses too, and picking the
+		# first row would anchor the desk tab on the wrong conversation.
+		with patch("erpnext.ai.paperclip.requests.request") as req:
+			req.return_value.status_code = 200
+			req.return_value.json.side_effect = [
+				[
+					{"id": "wrong", "title": "Board Operations — weekly CEO digest", "status": "todo"},
+					{"id": "right", "title": "Board Operations", "status": "todo"},
+				],
+				[{"id": "c-1", "body": "hi", "authorUserId": "board-concierge"}],
+			]
+			out = paperclip.get_board_thread()
+		self.assertEqual(out["issue_id"], "right")
+		self.assertEqual(out["comments"][0]["id"], "c-1")
+
+	def test_thread_comments_are_capped(self):
+		# The Board Operations issue is shared with Paperclip's own UI and grows
+		# without bound, while the tab re-polls it every few seconds.
+		with patch("erpnext.ai.paperclip.requests.request") as req:
+			req.return_value.status_code = 200
+			req.return_value.json.side_effect = [
+				[{"id": "right", "title": "Board Operations", "status": "todo"}],
+				[{"id": f"c-{i}", "body": "x"} for i in range(250)],
+			]
+			out = paperclip.get_board_thread()
+		self.assertEqual(len(out["comments"]), paperclip.MAX_THREAD_COMMENTS)
+		self.assertEqual(out["comments"][-1]["id"], "c-249")
+
 	def test_role_gate_blocks_users_without_an_allowed_role(self):
 		with patch("erpnext.ai.paperclip.frappe.get_roles", return_value=["Stock User"]):
 			self.assertRaises(frappe.PermissionError, paperclip.assert_ai_user)

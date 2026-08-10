@@ -32,7 +32,7 @@ can be broken by configuration outside this repository.
 | `registry.py` | Tool registration (`@tool`), the `enabled_tools` allowlist, and the blast-radius caps (`clamp_limit`, `assert_value_within_cap`) |
 | `scoping.py` | Bound-company resolution and filter injection; refuses out-of-scope entities and doctypes that cannot be company-scoped |
 | `knowledge.py` | Live orientation text handed to the agent on `initialize`, and the workspace/URL map used by discovery tools |
-| `paperclip.py` | Role-gated server-side proxies for the desk SPA (thread, run events, approvals) -- the board API key never reaches the browser |
+| `paperclip.py` | Role-gated server-side proxies for the desk SPA (board chat, thread, run events, approvals) -- the board API key never reaches the browser |
 | `tools/discovery.py` | `get_company_context`, `search_doctypes`, `describe_doctype`, `list_reports`, `get_workspace_map` |
 | `tools/documents.py` | `search_documents`, `get_document`, `create_document`, `update_document`, `submit_document`, `cancel_document`, `delete_document` |
 | `tools/reports.py` | `run_report` |
@@ -50,9 +50,16 @@ That is fifteen tools in total across `discovery` (5), `documents` (7), `reports
 
 1. Build the desk SPA: `yarn build:ai` (from the repo root). This installs
    the `ai/` frontend's dependencies and runs `vite build`, which outputs
-   `erpnext/public/ai/ai.bundle.js` -- `public/ai` is gitignored, so a fresh
-   checkout has no bundle until this runs, and the desk page will otherwise
-   fail to load with "AI bundle failed to load".
+   `erpnext/public/ai/ai.bundle.js`.
+
+   **That output is committed**, unlike every other built asset here. The
+   production image is built from this repo over git and its only asset step is
+   `bench build`, which is Frappe's esbuild over `public/js/*.bundle.js` -- it
+   knows nothing about `ai/`'s Vite build, so a gitignored bundle would simply
+   be missing in production and the tab would render "AI bundle failed to load".
+   Consequence: **any change under `ai/src/` must be followed by `yarn build:ai`
+   and the rebuilt bundle committed alongside it**, or production silently keeps
+   serving the previous UI.
 2. Fill `PAPERCLIP_*` and `ERPNEXT_MCP_URL` in `prod-docker/.env` (see
    `prod-docker/.env.example` for the full key set).
 3. Create an ERPNext API key/secret for the AI service user. Export them for
@@ -73,6 +80,37 @@ That is fifteen tools in total across `discovery` (5), `documents` (7), `reports
 5. In Paperclip, bind the connection's catalogue to the CEO via a tool access
    profile, and add a tool policy requiring approval for `submit_document`,
    `cancel_document`, `delete_document` and `call_method`.
+
+## Two chat channels
+
+The desk tab talks to two different things, switched by the buttons at the top:
+
+| | Board room | CEO |
+|---|---|---|
+| Endpoint | `POST {paperclip}/api/board/chat/stream` (SSE) | comment on the standing issue |
+| Answers | in-request, one turn, ≤120s | asynchronously, as a heartbeat run |
+| Can use the ERPNext tools | no | yes, through the gateway |
+| Thread | Paperclip's own `Board Operations` issue -- the same transcript the Conference Room UI shows | `ERPNext Operations` |
+
+Board chat is the conversational default; the CEO channel is the one that does
+work and raises approvals. Both sides of a board exchange are persisted by
+Paperclip as comments (the concierge's own turns carry `authorUserId:
+"board-concierge"`), so a dropped request loses the response body but not the
+conversation -- the next poll shows it.
+
+Server-side prerequisites live outside this repo: the instance needs
+`enableConferenceRoomChat`, and -- because upstream restricts board chat to
+`deploymentMode: local_trusted` -- the instance-admin gate patch plus
+`PAPERCLIP_BOARD_CHAT_ALLOW_INSTANCE_ADMIN=1`. A `403 DEPLOYMENT_MODE_UNSUPPORTED`
+here means an npm update reverted that patch on the Paperclip host. The token in
+`PAPERCLIP_BOARD_API_KEY` must belong to the **instance admin** (a company admin
+gets 403), and board API keys expire 30 days after mint.
+
+Blast radius: the endpoint spawns an unrestricted `claude` process on the
+Paperclip host. `allowed_roles` is the only thing between a desk user and that.
+`GUNICORN_TIMEOUT`/`PROXY_READ_TIMEOUT` are set to 180 so the proxy outlives
+Paperclip's own 120s cap rather than cutting the answer off at exactly the wrong
+moment.
 
 ## Tests
 

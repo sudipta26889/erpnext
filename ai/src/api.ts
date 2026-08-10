@@ -1,4 +1,4 @@
-import type { ActionRequest, RunEvent, Thread } from './types';
+import type { ActionRequest, BoardThread, RunEvent, Thread } from './types';
 
 // Every Paperclip call is proxied through ERPNext so the board API key never
 // reaches the browser and each entry point re-checks the caller's role.
@@ -26,6 +26,15 @@ export const api = {
   // go through the CSRF-token-checked path, which only applies to non-GET.
   thread: () => call<Thread>('erpnext.ai.paperclip.get_thread', {}, true),
   send: (message: string) => call<{ issue_id: string }>('erpnext.ai.paperclip.send_message', { message }, true),
+  boardThread: () => call<BoardThread>('erpnext.ai.paperclip.get_board_thread'),
+  // Answers in-request rather than waking an agent, so this call blocks for as
+  // long as the concierge takes (Paperclip caps it at 120s).
+  boardChat: (message: string) =>
+    call<{ issue_id: string | null; answer: string; timed_out: boolean }>(
+      'erpnext.ai.paperclip.board_chat',
+      { message },
+      true
+    ),
   events: (runId: string, afterSeq: number) =>
     call<{ events: RunEvent[] }>('erpnext.ai.paperclip.get_run_events', {
       run_id: runId,

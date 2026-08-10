@@ -19,6 +19,15 @@ from erpnext.ai import registry
 TIMEOUT = 30
 STANDING_ISSUE_TITLE = "ERPNext Operations"
 
+# Conference Room chat. Paperclip hard-caps a board chat at 120s server-side, so
+# the read timeout only has to sit above that -- it is a "the stream went silent"
+# guard, not the budget.
+BOARD_CHAT_READ_TIMEOUT = 150
+BOARD_ISSUE_TITLE = "Board Operations"
+# The Board Operations issue is shared with Paperclip's own Conference Room UI and
+# grows without bound; the desk tab re-polls it every few seconds.
+MAX_THREAD_COMMENTS = 100
+
 
 class PaperclipError(Exception):
 	pass
@@ -54,18 +63,35 @@ class PaperclipClient:
 		self.company_id = company_id
 		self.agent_id = agent_id
 
-	def request(
-		self, method: str, path: str, json_body: dict | None = None, params: dict | None = None
-	) -> dict:
+	def _send(
+		self,
+		method: str,
+		path: str,
+		json_body: dict | None = None,
+		params: dict | None = None,
+		timeout: int | tuple[int, int] = TIMEOUT,
+		stream: bool = False,
+	):
 		url = f"{self.base_url}/{path.lstrip('/')}"
-		response = requests.request(
-			method,
-			url,
-			headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-			json=json_body,
-			params=params,
-			timeout=TIMEOUT,
-		)
+		try:
+			response = requests.request(
+				method,
+				url,
+				headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+				json=json_body,
+				params=params,
+				timeout=timeout,
+				stream=stream,
+			)
+		except requests.RequestException as exc:
+			# DNS failure, refused connection, read timeout: without this the raw
+			# exception escapes as a 500 whose traceback line can carry the
+			# internal URL. Same rule as a non-2xx -- detail to the log only.
+			frappe.log_error(title="Paperclip request failed", message=f"{method} {path} -> {exc!r}")
+			raise PaperclipError(
+				_("Paperclip {0} {1} got no response. The detail has been logged.").format(method, path)
+			) from None
+
 		if response.status_code < 200 or response.status_code >= 300:
 			# The remote's response body is untrusted content once Paperclip is
 			# compromised, misconfigured or simply having a bad day -- it must
@@ -82,6 +108,12 @@ class PaperclipClient:
 					method, path, response.status_code
 				)
 			)
+		return response
+
+	def request(
+		self, method: str, path: str, json_body: dict | None = None, params: dict | None = None
+	) -> dict:
+		response = self._send(method, path, json_body=json_body, params=params)
 		try:
 			return response.json()
 		except ValueError:
@@ -89,6 +121,55 @@ class PaperclipClient:
 
 	def health(self) -> dict:
 		return self.request("GET", "/api/health")
+
+	def chat(self, message: str, task_id: str | None = None) -> dict:
+		"""Conference Room chat -- the board concierge, answered synchronously.
+
+		`POST /api/board/chat/stream` returns Server-Sent Events, so this reads
+		the stream to completion and hands back the whole answer; there is no
+		partial-token surface in the desk tab. Both the question and the reply
+		are persisted as comments on the anchoring issue by Paperclip itself, so
+		a dropped connection loses the response *body* but not the exchange --
+		the polled thread still picks it up.
+		"""
+		body = {"companyId": self.company_id, "message": message}
+		if task_id:
+			body["taskId"] = task_id
+
+		response = self._send(
+			"POST",
+			"/api/board/chat/stream",
+			json_body=body,
+			timeout=(TIMEOUT, BOARD_CHAT_READ_TIMEOUT),
+			stream=True,
+		)
+		response.encoding = "utf-8"
+
+		answer: list[str] = []
+		issue_id, timed_out = None, False
+		for line in response.iter_lines(decode_unicode=True):
+			if not line or not line.startswith("data:"):
+				continue
+			try:
+				event = json.loads(line[len("data:") :])
+			except ValueError:
+				continue
+
+			kind = event.get("type")
+			if kind == "chunk":
+				answer.append(event.get("text") or "")
+			elif kind == "error":
+				# The frame's message is the remote's own words -- log it, never
+				# surface it, exactly as for a non-2xx body.
+				frappe.log_error(
+					title="Paperclip board chat failed", message=str(event.get("message"))[:2000]
+				)
+				raise PaperclipError(_("The board chat stream reported a failure. It has been logged."))
+			else:  # start / status / done
+				issue_id = event.get("issueId") or issue_id
+				timed_out = timed_out or bool(event.get("timedOut"))
+
+		return {"issue_id": issue_id, "answer": "".join(answer), "timed_out": timed_out}
 
 
 def get_client() -> PaperclipClient:
@@ -118,16 +199,32 @@ def assert_ai_user() -> None:
 		frappe.throw(_("You are not permitted to use the AI workspace."), frappe.PermissionError)
 
 
+def _find_issue(client: PaperclipClient, title: str) -> str | None:
+	"""The open issue with exactly this title, if there is one.
+
+	`q` is a fuzzy search on Paperclip's side -- q="Board Operations" also
+	returns "Friday board digest" -- so the exact-title check here is what
+	actually selects the thread, not the query.
+	"""
+	issues = client.request("GET", f"/api/companies/{client.company_id}/issues", params={"q": title})
+	rows = issues if isinstance(issues, list) else issues.get("issues") or []
+	for row in rows:
+		if row.get("title") == title and row.get("status") not in ("done", "cancelled"):
+			return row["id"]
+	return None
+
+
+def _comment_rows(raw: dict | list) -> list:
+	rows = raw if isinstance(raw, list) else raw.get("comments") or []
+	return rows[-MAX_THREAD_COMMENTS:] if isinstance(rows, list) else []
+
+
 def _standing_issue(client: PaperclipClient) -> str:
 	"""Find or create the standing conversation issue, mirroring how Paperclip's
 	own board chat anchors on a 'Board Operations' issue."""
-	issues = client.request(
-		"GET", f"/api/companies/{client.company_id}/issues", params={"q": STANDING_ISSUE_TITLE}
-	)
-	rows = issues if isinstance(issues, list) else issues.get("issues") or []
-	for row in rows:
-		if row.get("title") == STANDING_ISSUE_TITLE and row.get("status") not in ("done", "cancelled"):
-			return row["id"]
+	found = _find_issue(client, STANDING_ISSUE_TITLE)
+	if found:
+		return found
 
 	created = client.request(
 		"POST",
@@ -163,7 +260,9 @@ def get_thread() -> dict:
 	issue_id = _standing_issue(client)
 	return {
 		"issue_id": issue_id,
-		"comments": client.request("GET", f"/api/issues/{issue_id}/comments", params={"order": "asc"}),
+		"comments": _comment_rows(
+			client.request("GET", f"/api/issues/{issue_id}/comments", params={"order": "asc"})
+		),
 		"live_runs": client.request("GET", f"/api/issues/{issue_id}/live-runs"),
 	}
 
@@ -177,6 +276,44 @@ def send_message(message: str) -> dict:
 	issue_id = _standing_issue(client)
 	client.request("POST", f"/api/issues/{issue_id}/comments", json_body={"body": message})
 	return {"issue_id": issue_id, "sent": True}
+
+
+@frappe.whitelist(methods=["POST"])
+@_sanitize_paperclip_errors
+def board_chat(message: str) -> dict:
+	"""Ask the Conference Room concierge and wait for its answer.
+
+	This is the conversational channel: it replies in one turn, in-request,
+	instead of waking the CEO agent and streaming a run.
+
+	Blast radius, on purpose stated here: the endpoint spawns an unrestricted
+	`claude` process on the Paperclip host. Anyone who passes `assert_ai_user()`
+	reaches it, so the AI workspace role gate is the only thing standing in
+	front of that -- keep `allowed_roles` tight.
+	"""
+	assert_ai_user()
+	return get_client().chat(message)
+
+
+@frappe.whitelist()
+@_sanitize_paperclip_errors
+def get_board_thread() -> dict:
+	"""The Conference Room transcript -- the same issue the Paperclip UI uses.
+
+	Read-only (unlike `get_thread`, this never creates the issue -- Paperclip
+	creates it on the first chat), so it is safe as a GET.
+	"""
+	assert_ai_user()
+	client = get_client()
+	issue_id = _find_issue(client, BOARD_ISSUE_TITLE)
+	if not issue_id:
+		return {"issue_id": None, "comments": []}
+	return {
+		"issue_id": issue_id,
+		"comments": _comment_rows(
+			client.request("GET", f"/api/issues/{issue_id}/comments", params={"order": "asc"})
+		),
+	}
 
 
 @frappe.whitelist()
