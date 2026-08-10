@@ -1,4 +1,4 @@
-frappe.pages["ai"].on_page_load = function (wrapper) {
+frappe.pages["ai-chat"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
 		title: __("AI"),

@@ -13,10 +13,8 @@
  "idx": 0,
  "is_hidden": 0,
  "label": "AI",
- "link_to": "ai",
- "link_type": "Page",
  "links": [],
- "modified": "2026-08-06 12:00:00.000000",
+ "modified": "2026-08-10 11:30:00.000000",
  "modified_by": "Administrator",
  "module": "AI",
  "name": "AI",
@@ -28,6 +26,47 @@
  "roles": [],
  "sequence_id": 1.5,
  "shortcuts": [],
+ "sidebar_items": [
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "sparkles",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "AI",
+   "link_to": "ai-chat",
+   "link_type": "Page",
+   "open_in_new_tab": 0,
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "settings",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "AI Settings",
+   "link_to": "AI Settings",
+   "link_type": "DocType",
+   "open_in_new_tab": 0,
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "list",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "AI Idempotency Record",
+   "link_to": "AI Idempotency Record",
+   "link_type": "DocType",
+   "open_in_new_tab": 0,
+   "show_arrow": 0,
+   "type": "Link"
+  }
+ ],
  "title": "AI",
- "type": "Link"
+ "type": "Workspace"
 }

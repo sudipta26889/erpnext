@@ -40,7 +40,7 @@ can be broken by configuration outside this repository.
 | `doctype/ai_settings/` | The `AI Settings` single: Paperclip connection details, `erpnext_company` binding, and every cap above |
 | `doctype/ai_company_item/` | Child table of `AI Settings.additional_companies` -- companies beyond the primary that the agent may also access |
 | `doctype/ai_idempotency_record/` | Backing store for `create_document`'s idempotency key, so a retried call reuses the original document instead of creating a duplicate |
-| `page/ai/` | Desk page hosting the SPA; `ai.py::get_boot_info` gates entry by `allowed_roles` |
+| `page/ai_chat/` | Desk page hosting the SPA at `/desk/ai-chat`; `ai_chat.py::get_boot_info` gates entry by `allowed_roles` |
 | `workspace/ai/` | The `AI` workspace entry linking to the page |
 | `ai/` (repo root) | React source for the desk SPA; `vite build` outputs an IIFE bundle to `erpnext/public/ai/ai.bundle.js`, loaded into the desk page via `frappe.require` |
 
@@ -72,7 +72,7 @@ That is fifteen tools in total across `discovery` (5), `documents` (7), `reports
    on every call, including the handshake, with nothing else pointing at AI
    Settings -- either grant the service user an already-listed role, or add
    its role to `allowed_roles` first. `allowed_roles` is shared with the desk
-   `AI` page's own gate (`page/ai/ai.py::get_boot_info`), so admitting the
+   `AI` page's own gate (`page/ai_chat/ai_chat.py::get_boot_info`), so admitting the
    service account's role here also grants that role the desk AI tab for any
    human user who holds it -- pick or add a role with that in mind, not just
    "whatever the service user already has".
@@ -80,6 +80,24 @@ That is fifteen tools in total across `discovery` (5), `documents` (7), `reports
 5. In Paperclip, bind the connection's catalogue to the CEO via a tool access
    profile, and add a tool policy requiring approval for `submit_document`,
    `cancel_document`, `delete_document` and `call_method`.
+
+## Why the page is called `ai-chat` and not `ai`
+
+`router.js::convert_to_standard_route` resolves a single-segment desk route
+against `frappe.workspaces` **before** it falls through to the Page view. A Page
+named `ai` therefore cannot be reached while a public Workspace named `AI`
+exists -- `/desk/ai` renders the workspace, always. The workspace ships no
+content blocks, so what you get is a page with the right title and an empty
+body, and nothing in the console to say why.
+
+The v17 rail entry resolves to the **first `Link` item in the workspace's
+authored `sidebar_items`** (`frappe/boot.py::get_sidebar_items`). A workspace
+with none authored gets a sidebar generated from its module, whose first link is
+the workspace itself -- so the icon lands right back on the blank workspace.
+Both halves matter: the page is `ai-chat`, and `sidebar_items[0]` points at it.
+
+`erpnext/patches/v16_0/remove_legacy_ai_page.py` deletes the shadowed `ai` Page
+on sites that already have it; Frappe's own orphan sweep did not.
 
 ## Two chat channels
 
