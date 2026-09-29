@@ -47,6 +47,8 @@ services:
       GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-180}
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
     image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
+    extra_hosts:
+      - nuc.lan:192.168.10.118  # pinned: a DNS blip on 2026-09-21 crashed workers + websocket
     networks:
       default: null
     platform: linux/amd64
@@ -72,6 +74,8 @@ services:
       - REDIS_QUEUE=${REDIS_QUEUE}
       - SOCKETIO_PORT=9000
     image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
+    extra_hosts:
+      - nuc.lan:192.168.10.118  # pinned: a DNS blip on 2026-09-21 crashed workers + websocket
     networks:
       default: null
     platform: linux/amd64
@@ -102,6 +106,8 @@ services:
       UPSTREAM_REAL_IP_HEADER: ${UPSTREAM_REAL_IP_HEADER:-X-Forwarded-For}
       UPSTREAM_REAL_IP_RECURSIVE: ${UPSTREAM_REAL_IP_RECURSIVE:-off}
     image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
+    extra_hosts:
+      - nuc.lan:192.168.10.118  # pinned: a DNS blip on 2026-09-21 crashed workers + websocket
     networks:
       default: null
     platform: linux/amd64
@@ -121,6 +127,8 @@ services:
         condition: service_completed_successfully
         required: true
     image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
+    extra_hosts:
+      - nuc.lan:192.168.10.118  # pinned: a DNS blip on 2026-09-21 crashed workers + websocket
     networks:
       default: null
     platform: linux/amd64
@@ -138,6 +146,8 @@ services:
         condition: service_completed_successfully
         required: true
     image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
+    extra_hosts:
+      - nuc.lan:192.168.10.118  # pinned: a DNS blip on 2026-09-21 crashed workers + websocket
     networks:
       default: null
     platform: linux/amd64
@@ -155,6 +165,8 @@ services:
         condition: service_completed_successfully
         required: true
     image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
+    extra_hosts:
+      - nuc.lan:192.168.10.118  # pinned: a DNS blip on 2026-09-21 crashed workers + websocket
     networks:
       default: null
     platform: linux/amd64
@@ -174,6 +186,8 @@ services:
         condition: service_completed_successfully
         required: true
     image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
+    extra_hosts:
+      - nuc.lan:192.168.10.118  # pinned: a DNS blip on 2026-09-21 crashed workers + websocket
     networks:
       default: null
     platform: linux/amd64
