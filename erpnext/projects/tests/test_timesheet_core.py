@@ -11,10 +11,10 @@ rebuilds just the project/task-free slice of it (I9)."""
 from datetime import timedelta
 
 import frappe
-from frappe.tests import IntegrationTestCase
 from frappe.utils import now_datetime
 
 from erpnext.projects.doctype.timesheet.timesheet import OverlapError
+from erpnext.tests.utils import ERPNextTestSuite
 
 
 def update_activity_type(activity_type):
@@ -70,7 +70,7 @@ def make_timesheet(
 	return timesheet
 
 
-class TestTimesheetCore(IntegrationTestCase):
+class TestTimesheetCore(ERPNextTestSuite):
 	def setUp(self):
 		# Respect (don't fight) Projects Settings: enforce the user-overlap check this test
 		# exercises, and turn off the employee-overlap check since these timesheets carry no

@@ -34,7 +34,7 @@ class TestMapping(TestCase):
 		self.assertEqual(d.status, "Working")
 		self.assertEqual(d.priority, "High")
 		self.assertEqual(d.project, "WEBSITE")
-		self.assertEqual(d.exp_end_date, "2026-08-20")
+		self.assertEqual(d.exp_end_date, "2099-08-20")
 
 	def test_task_payload_round_trip(self):
 		doc = frappe._dict(
@@ -42,7 +42,7 @@ class TestMapping(TestCase):
 			description="<p>Hero</p>",
 			priority="Urgent",
 			exp_start_date="2026-08-10",
-			exp_end_date="2026-08-20",
+			exp_end_date="2099-08-20",
 			name="WEBSITE-12",
 		)
 		payload = m.task_to_work_item_payload(doc, state_id="s-progress", parent_uuid=None)

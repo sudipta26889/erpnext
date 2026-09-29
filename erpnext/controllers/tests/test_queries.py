@@ -1,4 +1,5 @@
 from functools import partial
+from unittest.mock import patch
 
 import frappe
 from frappe.core.doctype.user_permission.test_user_permission import create_user
@@ -6,6 +7,7 @@ from frappe.core.doctype.user_permission.user_permission import add_user_permiss
 from frappe.custom.doctype.property_setter.property_setter import make_property_setter
 
 from erpnext.controllers import queries
+from erpnext.projects.tests import fixtures
 from erpnext.stock.doctype.item.test_item import make_item
 from erpnext.subcontracting.doctype.subcontracting_order.test_subcontracting_order import (
 	make_subcontracted_variant,
@@ -90,10 +92,14 @@ class TestQueries(ERPNextTestSuite):
 
 		self.assertGreaterEqual(len(query(txt="_Test Item Home Desktop Manufactured")), 1)
 
-	def test_project_query(self):
+	@patch("erpnext.controllers.queries.get_client")
+	def test_project_query(self, get_client):
+		# projects live in TaskPilot now, so the search runs over the client's list, not a table
+		get_client.return_value.list_projects.return_value = [fixtures.PROJECT]
 		query = add_default_params(queries.get_project_name, "Project")
 
-		self.assertGreaterEqual(len(query(txt="_Test Project")), 1)
+		self.assertEqual(query(txt="revamp"), [["WEBSITE", "Website Revamp"]])
+		self.assertEqual(query(txt="nomatch"), [])
 
 	def test_account_query(self):
 		query = add_default_params(queries.get_account_list, "Account")

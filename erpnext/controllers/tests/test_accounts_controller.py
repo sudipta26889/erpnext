@@ -1,6 +1,7 @@
 # Copyright (c) 2022, Frappe Technologies Pvt. Ltd. and contributors
 # For license information, please see license.txt
 
+import unittest
 
 import frappe
 from frappe import qb
@@ -17,8 +18,14 @@ from erpnext.buying.doctype.purchase_order.test_purchase_order import (
 	create_purchase_order,
 	prepare_data_for_internal_transfer,
 )
-from erpnext.projects.doctype.project.test_project import make_project
 from erpnext.tests.utils import ERPNextTestSuite
+
+try:
+	from erpnext.projects.doctype.project.test_project import make_project
+except ImportError:
+	# test_project was deleted when Project became a TaskPilot-backed virtual doctype (11a0f1c230);
+	# tests that need a local Project are skipped instead of failing this module's collection.
+	make_project = None
 
 
 class TestAccountsController(ERPNextTestSuite):
@@ -2113,6 +2120,7 @@ class TestAccountsController(ERPNextTestSuite):
 		purchase_invoice = frappe.get_doc("Purchase Invoice", pi.name)
 		self.assertEqual(purchase_invoice.advances[0].difference_posting_date, journal_voucher.posting_date)
 
+	@unittest.skipIf(make_project is None, "erpnext.projects.doctype.project.test_project was removed")
 	def test_company_validation_in_dimension(self):
 		si = create_sales_invoice(do_not_submit=True)
 		project = make_project({"project_name": "_Test Demo Project1", "company": "_Test Company 1"})

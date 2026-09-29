@@ -27,7 +27,7 @@ WORK_ITEM = {
 	"description_html": "<p>Hero + nav</p>",
 	"priority": "high",
 	"start_date": "2026-08-10",
-	"target_date": "2026-08-20",
+	"target_date": "2099-08-20",
 	"sequence_id": 12,
 	"parent": None,
 	"state": "s-progress",
