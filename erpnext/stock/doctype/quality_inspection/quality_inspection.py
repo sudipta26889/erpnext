@@ -155,7 +155,12 @@ class QualityInspection(Document):
 			)
 
 	def before_submit(self):
+		self.validate_sample_size()
 		self.validate_readings_status_mandatory()
+
+	def validate_sample_size(self):
+		if flt(self.sample_size) <= 0:
+			frappe.throw(_("Sample Size must be greater than zero"), title=_("Invalid Sample Size"))
 
 	@frappe.whitelist()
 	def get_item_specification_details(self):
@@ -264,6 +269,9 @@ class QualityInspection(Document):
 					"modified",
 					self.modified,
 				)
+
+		if self.reference_type and self.reference_name:
+			frappe.get_lazy_doc(self.reference_type, self.reference_name).notify_update()
 
 	def inspect_and_set_status(self):
 		for reading in self.readings:
@@ -443,7 +451,7 @@ def item_query(doctype: Any, txt: str | None, searchfield: Any, start: int, page
 					"and",
 					["items.secondary_item_type", "is", "not set"],
 					"and",
-					["items.is_legacy_scrap_item", "=", 0],
+					["items.valuation_type", "is", "not set"],
 				]
 			)
 			if purpose == "Manufacture":
@@ -517,7 +525,7 @@ def item_query(doctype: Any, txt: str | None, searchfield: Any, start: int, page
 def quality_inspection_query(
 	doctype: Any, txt: str | None, searchfield: Any, start: int, page_len: int, filters: dict
 ):
-	return frappe.get_all(
+	return frappe.get_list(
 		"Quality Inspection",
 		limit_start=start,
 		limit_page_length=page_len,

@@ -22,13 +22,18 @@ from erpnext.accounts.doctype.repost_accounting_ledger.repost_accounting_ledger 
 )
 from erpnext.accounts.doctype.tax_withholding_entry.tax_withholding_entry import SalesTaxWithholding
 from erpnext.accounts.party import get_due_date, get_party_account
-from erpnext.accounts.utils import refresh_subscription_status, update_voucher_outstanding
+from erpnext.accounts.utils import (
+	pre_submit_validation,
+	refresh_subscription_status,
+	update_voucher_outstanding,
+)
 from erpnext.controllers.accounts_controller import validate_account_head
 from erpnext.controllers.selling_controller import SellingController
 from erpnext.setup.doctype.company.company import update_company_current_month_sales
 from erpnext.stock.doctype.delivery_note.services.billing_status import (
 	update_billed_amount_based_on_so,
 )
+from erpnext.stock.utils import get_bin_qty_map
 
 from .services.fixed_assets import FixedAssetService
 from .services.inter_company import (
@@ -201,6 +206,10 @@ class SalesInvoice(SellingController):
 		set_warehouse: DF.Link | None
 		shipping_address: DF.TextEditor | None
 		shipping_address_name: DF.Link | None
+		shipping_contact_display: DF.SmallText | None
+		shipping_contact_email: DF.Data | None
+		shipping_contact_mobile: DF.SmallText | None
+		shipping_contact_person: DF.Link | None
 		shipping_rule: DF.Link | None
 		status: DF.Literal[
 			"",
@@ -272,6 +281,9 @@ class SalesInvoice(SellingController):
 				"keyword": "Billed",
 				"overflow_type": "billing",
 			}
+		]
+		self.closed_source_links = [
+			("Sales Invoice Item", "dn_detail", "Delivery Note Item", "Delivery Note")
 		]
 
 	def set_indicator(self):
@@ -377,6 +389,7 @@ class SalesInvoice(SellingController):
 		self.reset_default_field_value("set_warehouse", "items", "warehouse")
 		self.validate_subcontracted_sales_order()
 		self.validate_scio_self_rm_qty()
+		pre_submit_validation(self, check_prev_docstatus=True, check_credit_limit=True)
 
 	def validate_update_stock_for_pick_list_reference(self):
 		if self.update_stock or self.is_return:
@@ -606,6 +619,7 @@ class SalesInvoice(SellingController):
 					"percent_join_field": "sales_order",
 					"status_field": "delivery_status",
 					"keyword": "Delivered",
+					"exclude_field": "skip_delivery",
 					"second_source_dt": "Delivery Note Item",
 					"second_source_field": "qty",
 					"second_join_field": "so_detail",
@@ -969,11 +983,17 @@ class SalesInvoice(SellingController):
 			)
 
 	def update_current_stock(self):
+		bin_qty_map = get_bin_qty_map(self.items + self.packed_items)
+
 		for item in self.items:
-			item.set_actual_qty()
+			if item.item_code and item.warehouse:
+				bin_data = bin_qty_map.get((item.item_code, item.warehouse))
+				item.actual_qty = bin_data.actual_qty if bin_data else 0
 
 		for packed_item in self.packed_items:
-			packed_item.set_actual_and_projected_qty()
+			bin_data = bin_qty_map.get((packed_item.item_code, packed_item.warehouse))
+			packed_item.actual_qty = bin_data.actual_qty if bin_data else 0
+			packed_item.projected_qty = bin_data.projected_qty if bin_data else 0
 
 	def update_packing_list(self):
 		if cint(self.update_stock) == 1:

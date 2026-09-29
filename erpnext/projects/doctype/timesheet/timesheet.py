@@ -308,6 +308,12 @@ def get_projectwise_timesheet_data(
 	tsd = frappe.qb.DocType("Timesheet Detail")
 	ts = frappe.qb.DocType("Timesheet")
 
+	allowed_timesheets = frappe.get_list("Timesheet", pluck="name")
+	allowed_projects = frappe.get_list("Project", pluck="name")
+
+	if not allowed_timesheets:
+		return []
+
 	query = (
 		frappe.qb.from_(tsd)
 		.inner_join(ts)
@@ -329,8 +335,14 @@ def get_projectwise_timesheet_data(
 			& (tsd.docstatus == 1)
 			& (tsd.is_billable == 1)
 			& tsd.sales_invoice.isnull()
+			& (tsd.parent.isin(allowed_timesheets))
 		)
 	)
+
+	if allowed_projects:
+		query = query.where((tsd.project.isin(allowed_projects)) | (tsd.project.isnull()))
+	else:
+		query = query.where(tsd.project.isnull())
 
 	if project:
 		query = query.where(tsd.project == project)
@@ -344,6 +356,11 @@ def get_projectwise_timesheet_data(
 
 @frappe.whitelist()
 def get_timesheet_detail_rate(timelog: str, currency: str):
+	allowed_timesheets = frappe.get_list("Timesheet", pluck="name")
+
+	if not allowed_timesheets:
+		return 0.0
+
 	ts = frappe.qb.DocType("Timesheet")
 	ts_detail = frappe.qb.DocType("Timesheet Detail")
 
@@ -351,10 +368,20 @@ def get_timesheet_detail_rate(timelog: str, currency: str):
 		frappe.qb.from_(ts_detail)
 		.inner_join(ts)
 		.on(ts.name == ts_detail.parent)
-		.select(ts_detail.billing_amount.as_("billing_amount"), ts.currency.as_("currency"))
-		.where(ts_detail.name == timelog)
+		.select(
+			ts_detail.billing_amount.as_("billing_amount"),
+			ts.currency.as_("currency"),
+			ts.name.as_("timesheet"),
+		)
+		.where((ts_detail.name == timelog) & ts_detail.parent.isin(allowed_timesheets))
+		.limit(1)
 		.run(as_dict=1)
-	)[0]
+	)
+
+	if not timelog_detail:
+		return 0.0
+
+	timelog_detail = timelog_detail[0]
 
 	if timelog_detail.currency:
 		exchange_rate = get_exchange_rate(timelog_detail.currency, currency)
@@ -368,6 +395,11 @@ def get_timesheet_detail_rate(timelog: str, currency: str):
 def get_timesheet(doctype: str, txt: str, searchfield: str, start: int, page_len: int, filters: dict):
 	if not filters:
 		filters = {}
+
+	allowed_timesheets = frappe.get_list("Timesheet", pluck="name")
+
+	if not allowed_timesheets:
+		return []
 
 	tsd = frappe.qb.DocType("Timesheet Detail")
 	ts = frappe.qb.DocType("Timesheet")
@@ -383,6 +415,7 @@ def get_timesheet(doctype: str, txt: str, searchfield: str, start: int, page_len
 			& (tsd.docstatus == 1)
 			& (ts.total_billable_amount > 0)
 			& tsd.parent.like(f"%{txt}%")
+			& tsd.parent.isin(allowed_timesheets)
 		)
 	)
 
@@ -393,12 +426,12 @@ def get_timesheet(doctype: str, txt: str, searchfield: str, start: int, page_len
 
 
 @frappe.whitelist()
-def get_timesheet_data(name: str, project: str):
+def get_timesheet_data(name: str, project: str | None = None):
 	data = None
-	if project and project != "":
+	if project:
 		data = get_projectwise_timesheet_data(project, name)
 	else:
-		data = frappe.get_all(
+		data = frappe.get_list(
 			"Timesheet",
 			fields=[
 				{"SUB": ["total_billable_amount", "total_billed_amount"], "as": "billing_amt"},
@@ -544,7 +577,9 @@ def get_timesheets_list(doctype, txt, filters, limit_start, limit_page_length=20
 		customer = contact.get_link_for("Customer")
 
 	if customer:
-		sales_invoices = frappe.get_all("Sales Invoice", filters={"customer": customer}, pluck="name")
+		sales_invoices = frappe.get_all(
+			"Sales Invoice", filters={"customer": customer, "docstatus": ["!=", 2]}, pluck="name"
+		)
 		if not sales_invoices:
 			# No invoices -> `conditions` below would stay empty -> `if conditions:` skips the
 			# where-clause -> every Timesheet leaks to this customer's portal. `[]` (not the `{}`
@@ -577,10 +612,7 @@ def get_timesheets_list(doctype, txt, filters, limit_start, limit_page_length=20
 				[table.sales_invoice.isin(sales_invoices), child_table.sales_invoice.isin(sales_invoices)]
 			)
 
-		if conditions:
-			query = query.where(frappe.qb.terms.Criterion.any(conditions))
-
-		return query.run(as_dict=True)
+		return query.where(frappe.qb.terms.Criterion.any(conditions)).run(as_dict=True)
 	else:
 		return {}
 

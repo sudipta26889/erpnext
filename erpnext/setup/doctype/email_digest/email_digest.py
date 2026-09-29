@@ -394,7 +394,7 @@ class EmailDigest(Document):
 
 		label = get_link_to_report(
 			"General Ledger",
-			_(self.meta.get_label("income")),
+			self.meta.get_translated_label("income"),
 			filters={
 				"from_date": self.future_from_date,
 				"to_date": self.future_to_date,
@@ -426,7 +426,7 @@ class EmailDigest(Document):
 			filters = {"currency": self.currency}
 			label = get_link_to_report(
 				"Profit and Loss Statement",
-				label=_(self.meta.get_label(root_type + "_year_to_date")),
+				label=self.meta.get_translated_label(root_type + "_year_to_date"),
 				filters=filters,
 			)
 
@@ -434,7 +434,7 @@ class EmailDigest(Document):
 			filters = {"currency": self.currency}
 			label = get_link_to_report(
 				"Profit and Loss Statement",
-				label=_(self.meta.get_label(root_type + "_year_to_date")),
+				label=self.meta.get_translated_label(root_type + "_year_to_date"),
 				filters=filters,
 			)
 
@@ -465,7 +465,7 @@ class EmailDigest(Document):
 
 		label = get_link_to_report(
 			"General Ledger",
-			_(self.meta.get_label("expenses_booked")),
+			self.meta.get_translated_label("expenses_booked"),
 			filters={
 				"company": self.company,
 				"from_date": self.future_from_date,
@@ -507,7 +507,7 @@ class EmailDigest(Document):
 
 		label = get_link_to_report(
 			"Sales Order",
-			label=_(self.meta.get_label("sales_orders_to_bill")),
+			label=self.meta.get_translated_label("sales_orders_to_bill"),
 			report_type="Report Builder",
 			doctype="Sales Order",
 			filters={
@@ -541,7 +541,7 @@ class EmailDigest(Document):
 
 		label = get_link_to_report(
 			"Sales Order",
-			label=_(self.meta.get_label("sales_orders_to_deliver")),
+			label=self.meta.get_translated_label("sales_orders_to_deliver"),
 			report_type="Report Builder",
 			doctype="Sales Order",
 			filters={
@@ -575,7 +575,7 @@ class EmailDigest(Document):
 
 		label = get_link_to_report(
 			"Purchase Order",
-			label=_(self.meta.get_label("purchase_orders_to_receive")),
+			label=self.meta.get_translated_label("purchase_orders_to_receive"),
 			report_type="Report Builder",
 			doctype="Purchase Order",
 			filters={
@@ -609,7 +609,7 @@ class EmailDigest(Document):
 
 		label = get_link_to_report(
 			"Purchase Order",
-			label=_(self.meta.get_label("purchase_orders_to_bill")),
+			label=self.meta.get_translated_label("purchase_orders_to_bill"),
 			report_type="Report Builder",
 			doctype="Purchase Order",
 			filters={
@@ -661,7 +661,9 @@ class EmailDigest(Document):
 					"company": self.company,
 				}
 				label = get_link_to_report(
-					"Account Balance", label=_(self.meta.get_label(fieldname)), filters=filters
+					"Account Balance",
+					label=self.meta.get_translated_label(fieldname),
+					filters=filters,
 				)
 			else:
 				filters = {
@@ -671,7 +673,9 @@ class EmailDigest(Document):
 					"company": self.company,
 				}
 				label = get_link_to_report(
-					"Account Balance", label=_(self.meta.get_label(fieldname)), filters=filters
+					"Account Balance",
+					label=self.meta.get_translated_label(fieldname),
+					filters=filters,
 				)
 
 			return {"label": label, "value": balance, "last_value": prev_balance}
@@ -679,17 +683,17 @@ class EmailDigest(Document):
 			if account_type == "Payable":
 				label = get_link_to_report(
 					"Accounts Payable",
-					label=_(self.meta.get_label(fieldname)),
+					label=self.meta.get_translated_label(fieldname),
 					filters={"report_date": self.future_to_date, "company": self.company},
 				)
 			elif account_type == "Receivable":
 				label = get_link_to_report(
 					"Accounts Receivable",
-					label=_(self.meta.get_label(fieldname)),
+					label=self.meta.get_translated_label(fieldname),
 					filters={"report_date": self.future_to_date, "company": self.company},
 				)
 			else:
-				label = _(self.meta.get_label(fieldname))
+				label = self.meta.get_translated_label(fieldname)
 
 			return {"label": label, "value": balance, "last_value": prev_balance, "count": count}
 
@@ -761,7 +765,7 @@ class EmailDigest(Document):
 		)[0]
 
 		return {
-			"label": self.meta.get_label(fieldname),
+			"label": self.meta.get_translated_label(fieldname),
 			"value": value,
 			"billed_value": billed_value,
 			"delivered_value": delivered_value,
@@ -794,7 +798,7 @@ class EmailDigest(Document):
 
 		label = get_link_to_report(
 			"Quotation",
-			label=_(self.meta.get_label(fieldname)),
+			label=self.meta.get_translated_label(fieldname),
 			report_type="Report Builder",
 			doctype="Quotation",
 			filters={
@@ -825,7 +829,7 @@ class EmailDigest(Document):
 
 		label = get_link_to_report(
 			doc_type,
-			label=_(self.meta.get_label(fieldname)),
+			label=self.meta.get_translated_label(fieldname),
 			report_type="Report Builder",
 			filters=filters,
 			doctype=doc_type,
@@ -959,7 +963,9 @@ def send():
 
 @frappe.whitelist()
 def get_digest_msg(name: str):
-	return frappe.get_doc("Email Digest", name).get_msg_html()
+	email_digest = frappe.get_doc("Email Digest", name)
+	email_digest.check_permission()
+	return email_digest.get_msg_html()
 
 
 def get_incomes_expenses_for_period(account, from_date, to_date):

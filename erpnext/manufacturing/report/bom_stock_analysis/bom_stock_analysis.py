@@ -229,11 +229,10 @@ def get_bom_data(filters):
 	bom_item = frappe.qb.DocType(bom_item_table)
 	stock_qty = get_stock_qty_by_item(filters).as_("stock_qty")
 
-	base = frappe.qb.from_(bom_item)
-	base = base.join(stock_qty) if filters.get("warehouse") else base.left_join(stock_qty)
-
 	query = (
-		base.on(bom_item.item_code == stock_qty.item_code)
+		frappe.qb.from_(bom_item)
+		.left_join(stock_qty)
+		.on(bom_item.item_code == stock_qty.item_code)
 		.select(
 			bom_item.item_code,
 			# non-grouped columns are constant per grouped item_code -> Max() keeps the GROUP BY valid
@@ -322,31 +321,12 @@ def get_manufacturer_records():
 def get_producible_fg_items(filters):
 	BOM_ITEM = frappe.qb.DocType("BOM Item")
 	BOM = frappe.qb.DocType("BOM")
-	BIN = frappe.qb.DocType("Bin")
-	WH = frappe.qb.DocType("Warehouse")
 
-	warehouse = filters.get("warehouse")
-	if not warehouse:
+	if not filters.get("warehouse"):
 		frappe.throw(_("Warehouse is required to get producible FG Items"))
 
-	warehouse_details = frappe.db.get_value("Warehouse", warehouse, ["lft", "rgt"], as_dict=1)
-
-	if warehouse_details:
-		bin_subquery = (
-			frappe.qb.from_(BIN)
-			.join(WH)
-			.on(BIN.warehouse == WH.name)
-			.select(BIN.item_code, Sum(BIN.actual_qty).as_("actual_qty"))
-			.where((WH.lft >= warehouse_details.lft) & (WH.rgt <= warehouse_details.rgt))
-			.groupby(BIN.item_code)
-		)
-	else:
-		bin_subquery = (
-			frappe.qb.from_(BIN)
-			.select(BIN.item_code, Sum(BIN.actual_qty).as_("actual_qty"))
-			.where(BIN.warehouse == warehouse)
-			.groupby(BIN.item_code)
-		)
+	bin_subquery = get_stock_qty_by_item(filters).as_("stock_qty")
+	qty_per_unit = Sum(BOM_ITEM.stock_qty) / Max(BOM.quantity)
 
 	query = (
 		frappe.qb.from_(BOM_ITEM)
@@ -360,11 +340,9 @@ def get_producible_fg_items(filters):
 			# item_code -> Max() keeps them valid on postgres with the same value MySQL picked.
 			# description is not: it belongs to the line, so it comes from a representative one below.
 			Max(BOM_ITEM.parent).as_("from_bom_no"),
-			Max(BOM_ITEM.stock_qty / BOM.quantity).as_("qty_per_unit"),
+			qty_per_unit.as_("qty_per_unit"),
 			Max(IfNull(bin_subquery.actual_qty, 0)).as_("available_qty"),
-			Floor(Max(bin_subquery.actual_qty) / ((Sum(BOM_ITEM.stock_qty)) / Max(BOM.quantity))).as_(
-				"producible_qty"
-			),
+			Floor(Max(bin_subquery.actual_qty) / qty_per_unit).as_("producible_qty"),
 		)
 		.where((BOM_ITEM.parent == filters.get("bom")) & (BOM_ITEM.parenttype == "BOM"))
 		.groupby(BOM_ITEM.item_code)

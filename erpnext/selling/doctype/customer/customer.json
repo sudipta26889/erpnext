@@ -8,6 +8,7 @@
  "description": "Buyer of Goods and Services.",
  "doctype": "DocType",
  "document_type": "Setup",
+ "documentation": "https://docs.frappe.io/erpnext/user/manual/en/customer",
  "engine": "InnoDB",
  "field_order": [
   "basic_info",
@@ -74,6 +75,9 @@
   "column_break_53",
   "disabled",
   "is_frozen",
+  "block_customer_section",
+  "on_hold",
+  "release_date",
   "sales_team_tab",
   "account_manager",
   "sales_team",
@@ -282,7 +286,6 @@
    "depends_on": "eval:!doc.__islocal",
    "fieldname": "address_contacts",
    "fieldtype": "Section Break",
-   "label": "Address and Contact",
    "options": "fa fa-map-marker"
   },
   {
@@ -314,6 +317,7 @@
    "description": "Select, to make the customer searchable with these fields",
    "fieldname": "primary_address_and_contact_detail",
    "fieldtype": "Section Break",
+   "hidden": 1,
    "label": "Primary Address and Contact"
   },
   {
@@ -328,6 +332,7 @@
    "fetch_from": "customer_primary_contact.mobile_no",
    "fieldname": "mobile_no",
    "fieldtype": "Read Only",
+   "hidden": 1,
    "label": "Mobile No",
    "no_copy": 1,
    "options": "Mobile"
@@ -336,6 +341,7 @@
    "fetch_from": "customer_primary_contact.email_id",
    "fieldname": "email_id",
    "fieldtype": "Read Only",
+   "hidden": 1,
    "label": "Email Id",
    "no_copy": 1,
    "options": "Email"
@@ -355,6 +361,7 @@
   {
    "fieldname": "primary_address",
    "fieldtype": "Text Editor",
+   "hidden": 1,
    "label": "Primary Address",
    "no_copy": 1,
    "read_only": 1
@@ -407,11 +414,31 @@
   },
   {
    "default": "0",
-   "description": "Blocks all further accounting entries on this customer's account. Only users with the frozen-entries role can override.\n",
+   "description": "Blocks new transactions and further accounting entries on this customer's account. Only users with the role set in Company's \"Roles Allowed to Set and Edit Frozen Account Entries\" can transact.",
    "fieldname": "is_frozen",
    "fieldtype": "Check",
    "label": "Is Frozen",
    "show_description_on_click": 1
+  },
+  {
+   "fieldname": "block_customer_section",
+   "fieldtype": "Section Break",
+   "label": "Block Customer"
+  },
+  {
+   "default": "0",
+   "description": "Blocks saving or submitting Sales Orders, Delivery Notes, Sales Invoices and POS Invoices for this customer.",
+   "fieldname": "on_hold",
+   "fieldtype": "Check",
+   "label": "Block Customer",
+   "show_description_on_click": 1
+  },
+  {
+   "depends_on": "eval:doc.on_hold",
+   "description": "Leave blank if the Customer is blocked indefinitely",
+   "fieldname": "release_date",
+   "fieldtype": "Date",
+   "label": "Release Date"
   },
   {
    "description": "Loyalty scheme this customer earns points under. Auto-assigned if a matching program exists.",
@@ -524,19 +551,19 @@
   },
   {
    "default": "0",
+   "description": "If checked, this Customer is only available for transactions in the companies listed below.",
    "fieldname": "restrict_to_companies",
    "fieldtype": "Check",
    "label": "Restrict to Companies",
-   "description": "If checked, this Customer is only available for transactions in the companies listed below.",
    "permlevel": 1
   },
   {
+   "depends_on": "eval:doc.restrict_to_companies",
    "fieldname": "allowed_companies",
    "fieldtype": "Table MultiSelect",
    "label": "Allowed Companies",
-   "options": "Company Restriction",
-   "depends_on": "eval:doc.restrict_to_companies",
    "mandatory_depends_on": "eval:doc.restrict_to_companies",
+   "options": "Company Restriction",
    "permlevel": 1
   },
   {
@@ -716,7 +743,7 @@
    "fieldtype": "Section Break"
   }
  ],
- "icon": "fa fa-user",
+ "icon": "user-round",
  "idx": 363,
  "image_field": "image",
  "index_web_pages_for_search": 1,
@@ -727,7 +754,7 @@
    "link_fieldname": "party"
   }
  ],
- "modified": "2026-07-23 12:00:00.000000",
+ "modified": "2026-09-23 11:29:53.410448",
  "modified_by": "Administrator",
  "module": "Selling",
  "name": "Customer",
@@ -797,6 +824,62 @@
    "read": 1,
    "report": 1,
    "role": "Accounts Manager"
+  },
+  {
+   "role": "Delivery Manager",
+   "select": 1
+  },
+  {
+   "role": "Delivery User",
+   "select": 1
+  },
+  {
+   "role": "Employee",
+   "select": 1
+  },
+  {
+   "role": "Fulfillment User",
+   "select": 1
+  },
+  {
+   "role": "HR Manager",
+   "select": 1
+  },
+  {
+   "role": "HR User",
+   "select": 1
+  },
+  {
+   "role": "Maintenance Manager",
+   "select": 1
+  },
+  {
+   "role": "Maintenance User",
+   "select": 1
+  },
+  {
+   "role": "Projects Manager",
+   "select": 1
+  },
+  {
+   "role": "Projects User",
+   "select": 1
+  },
+  {
+   "role": "Purchase Master Manager",
+   "select": 1
+  },
+  {
+   "role": "Quality Manager",
+   "select": 1
+  },
+  {
+   "role": "Support Team",
+   "select": 1
+  },
+  {
+   "role": "Website Manager",
+   "select": 1
   }
  ],
  "quick_entry": 1,

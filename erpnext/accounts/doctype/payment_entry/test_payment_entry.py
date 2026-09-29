@@ -782,6 +782,167 @@ class TestPaymentEntry(ERPNextTestSuite):
 
 		self.validate_gl_entries(pe.name, expected_gle)
 
+	def test_internal_transfer_rejects_same_account(self):
+		pe = frappe.new_doc("Payment Entry")
+		pe.payment_type = "Internal Transfer"
+		pe.company = "_Test Company"
+		pe.paid_from = "_Test Bank - _TC"
+		pe.paid_to = "_Test Bank - _TC"
+		pe.paid_amount = 100
+		pe.received_amount = 100
+		pe.reference_no = "same-account-transfer"
+		pe.reference_date = nowdate()
+
+		self.assertRaisesRegex(
+			frappe.ValidationError,
+			"Paid From and Paid To accounts must be different",
+			pe.insert,
+		)
+
+	def test_bank_charges_deduction(self):
+		bank_charges_account = create_account(
+			parent_account="Indirect Expenses - _TC",
+			account_name="_Test Bank Charges",
+			company="_Test Company",
+		)
+		frappe.db.set_value("Company", "_Test Company", "bank_charges_account", bank_charges_account)
+
+		pe = frappe.new_doc("Payment Entry")
+		pe.payment_type = "Internal Transfer"
+		pe.company = "_Test Company"
+		pe.paid_from = "_Test Bank - _TC"
+		pe.paid_to = "_Test Cash - _TC"
+		pe.paid_amount = 1000
+		pe.received_amount = 990
+		pe.reference_no = "4"
+		pe.reference_date = nowdate()
+
+		pe.setup_party_account_field()
+		pe.set_missing_values()
+		pe.set_exchange_rate()
+		pe.set_amounts()
+
+		self.assertEqual(pe.deductions[0].account, bank_charges_account)
+		self.assertEqual(pe.deductions[0].amount, 10)
+		pe.deductions[0].cost_center = "_Test Cost Center - _TC"
+
+		pe.insert()
+		pe.submit()
+
+		expected_gle = dict(
+			(d[0], d)
+			for d in [
+				["_Test Bank - _TC", 0, 1000, None],
+				["_Test Cash - _TC", 990, 0, None],
+				[bank_charges_account, 10, 0, None],
+			]
+		)
+
+		self.validate_gl_entries(pe.name, expected_gle)
+
+	def test_cross_currency_transfer_ignores_bank_charges_account(self):
+		exchange_gain_loss_account = frappe.db.get_value(
+			"Company", "_Test Company", "exchange_gain_loss_account"
+		)
+		bank_charges_account = create_account(
+			parent_account="Indirect Expenses - _TC",
+			account_name="_Test Bank Charges",
+			company="_Test Company",
+		)
+		frappe.db.set_value("Company", "_Test Company", "bank_charges_account", bank_charges_account)
+
+		pe = frappe.new_doc("Payment Entry")
+		pe.payment_type = "Internal Transfer"
+		pe.company = "_Test Company"
+		pe.paid_from = "_Test Bank USD - _TC"
+		pe.paid_to = "_Test Bank - _TC"
+		pe.paid_amount = 100
+		pe.source_exchange_rate = 50
+		pe.received_amount = 4500
+		pe.reference_no = "5"
+		pe.reference_date = nowdate()
+
+		pe.setup_party_account_field()
+		pe.set_missing_values()
+		pe.set_exchange_rate()
+		pe.set_amounts()
+
+		self.assertEqual(pe.deductions[0].account, exchange_gain_loss_account)
+		self.assertEqual(pe.deductions[0].amount, 500)
+		pe.deductions[0].cost_center = "_Test Cost Center - _TC"
+
+		pe.insert()
+		pe.submit()
+
+		expected_gle = dict(
+			(d[0], d)
+			for d in [
+				["_Test Bank USD - _TC", 0, 5000, None],
+				["_Test Bank - _TC", 4500, 0, None],
+				[exchange_gain_loss_account, 500.0, 0, None],
+			]
+		)
+
+		self.validate_gl_entries(pe.name, expected_gle)
+
+	def test_cross_currency_transfer_splits_bank_charge_and_exchange_gain_loss(self):
+		exchange_gain_loss_account = frappe.db.get_value(
+			"Company", "_Test Company", "exchange_gain_loss_account"
+		)
+		bank_charges_account = create_account(
+			parent_account="Indirect Expenses - _TC",
+			account_name="_Test Bank Charges",
+			company="_Test Company",
+		)
+
+		pe = frappe.new_doc("Payment Entry")
+		pe.payment_type = "Internal Transfer"
+		pe.company = "_Test Company"
+		pe.paid_from = "_Test Bank USD - _TC"
+		pe.paid_to = "_Test Bank - _TC"
+		pe.paid_amount = 100
+		pe.source_exchange_rate = 50
+		pe.received_amount = 4500
+		pe.reference_no = "6"
+		pe.reference_date = nowdate()
+		pe.append(
+			"deductions",
+			{
+				"account": bank_charges_account,
+				"cost_center": "_Test Cost Center - _TC",
+				"amount": 100,
+			},
+		)
+
+		pe.setup_party_account_field()
+		pe.set_missing_values()
+		pe.set_exchange_rate()
+		pe.set_amounts()
+
+		deductions = {d.account: d for d in pe.deductions}
+		self.assertEqual(deductions[bank_charges_account].amount, 100)
+		self.assertEqual(deductions[exchange_gain_loss_account].amount, 400)
+		self.assertTrue(deductions[exchange_gain_loss_account].is_exchange_gain_loss)
+		self.assertEqual(pe.difference_amount, 0)
+
+		for d in pe.deductions:
+			d.cost_center = "_Test Cost Center - _TC"
+
+		pe.insert()
+		pe.submit()
+
+		expected_gle = dict(
+			(d[0], d)
+			for d in [
+				["_Test Bank USD - _TC", 0, 5000, None],
+				["_Test Bank - _TC", 4500, 0, None],
+				[exchange_gain_loss_account, 400.0, 0, None],
+				[bank_charges_account, 100.0, 0, None],
+			]
+		)
+
+		self.validate_gl_entries(pe.name, expected_gle)
+
 	def test_payment_against_negative_sales_invoice(self):
 		si1 = create_sales_invoice()
 
@@ -949,6 +1110,59 @@ class TestPaymentEntry(ERPNextTestSuite):
 		self.assertEqual(exc_je_for_si, exc_je_for_pe)
 		outstanding_amount = flt(frappe.db.get_value("Sales Invoice", si.name, "outstanding_amount"))
 		self.assertEqual(outstanding_amount, 0)
+
+	def test_exchange_gain_loss_split_accounts(self):
+		gain_account = create_account(
+			account_name="_Test Exchange Gain",
+			parent_account="Indirect Expenses - _TC",
+			company="_Test Company",
+		)
+		loss_account = create_account(
+			account_name="_Test Exchange Loss",
+			parent_account="Indirect Expenses - _TC",
+			company="_Test Company",
+		)
+		frappe.db.set_value("Company", "_Test Company", "exchange_gain_account", gain_account)
+		frappe.db.set_value("Company", "_Test Company", "exchange_loss_account", loss_account)
+
+		si_gain = create_sales_invoice(
+			customer="_Test Customer USD",
+			debit_to="_Test Receivable USD - _TC",
+			currency="USD",
+			conversion_rate=50,
+		)
+		pe_gain = get_payment_entry("Sales Invoice", si_gain.name, bank_account="_Test Bank USD - _TC")
+		pe_gain.reference_no = "1"
+		pe_gain.reference_date = "2016-01-01"
+		pe_gain.source_exchange_rate = 55
+		pe_gain.save()
+		self.assertEqual(pe_gain.references[0].exchange_gain_loss, 500)
+		pe_gain.submit()
+
+		self.assertEqual(self.get_gain_loss_journal_account(pe_gain.name), gain_account)
+
+		si_loss = create_sales_invoice(
+			customer="_Test Customer USD",
+			debit_to="_Test Receivable USD - _TC",
+			currency="USD",
+			conversion_rate=55,
+		)
+		pe_loss = get_payment_entry("Sales Invoice", si_loss.name, bank_account="_Test Bank USD - _TC")
+		pe_loss.reference_no = "2"
+		pe_loss.reference_date = "2016-01-01"
+		pe_loss.source_exchange_rate = 50
+		pe_loss.save()
+		self.assertEqual(pe_loss.references[0].exchange_gain_loss, -500)
+		pe_loss.submit()
+
+		self.assertEqual(self.get_gain_loss_journal_account(pe_loss.name), loss_account)
+
+	def get_gain_loss_journal_account(self, payment_entry_name: str) -> str | None:
+		return frappe.db.get_value(
+			"Journal Entry Account",
+			{"reference_type": "Payment Entry", "reference_name": payment_entry_name, "docstatus": 1},
+			"account",
+		)
 
 	def test_payment_entry_against_sales_invoice_with_cost_centre(self):
 		from erpnext.accounts.doctype.cost_center.test_cost_center import create_cost_center
@@ -1469,6 +1683,40 @@ class TestPaymentEntry(ERPNextTestSuite):
 		self.assertEqual(references[2].voucher_no, si2.name)
 		self.assertEqual(references[1].payment_term, "Basic Amount Receivable")
 		self.assertEqual(references[2].payment_term, "Tax Receivable")
+
+	def test_negative_outstanding_invoice_currency_multicurrency(self):
+		"""
+		A foreign-currency invoice whose party account is in company currency should report its
+		negative outstanding amount in the account's currency, not the invoice's own currency.
+		"""
+		party_account_currency = frappe.db.get_value("Account", "Debtors - _TC", "account_currency")
+
+		credit_note = create_sales_invoice(
+			customer="_Test Customer",
+			currency="USD",
+			conversion_rate=50,
+			qty=-1,
+			is_return=1,
+		)
+
+		outstanding_amount = flt(frappe.db.get_value("Sales Invoice", credit_note.name, "outstanding_amount"))
+		self.assertLess(outstanding_amount, 0)
+
+		args = {
+			"posting_date": nowdate(),
+			"company": "_Test Company",
+			"party_type": "Customer",
+			"party": "_Test Customer",
+			"party_account": "Debtors - _TC",
+			"get_outstanding_invoices": True,
+		}
+		references = get_outstanding_reference_documents(args)
+
+		reference = next(r for r in references if r.voucher_no == credit_note.name)
+		self.assertEqual(reference.currency, party_account_currency)
+		self.assertEqual(
+			reference.invoice_amount, credit_note.base_rounded_total or credit_note.base_grand_total
+		)
 
 	def test_receive_payment_from_payable_party_type(self):
 		"""

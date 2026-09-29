@@ -9,6 +9,7 @@ from frappe.model.document import Document
 from frappe.model.mapper import get_mapped_doc
 from frappe.utils import cint, comma_and, flt, get_link_to_form, getdate, nowdate
 
+from erpnext.controllers.mapper import get_qty_already_mapped
 from erpnext.setup.doctype.brand.brand import get_brand_defaults
 from erpnext.setup.doctype.item_group.item_group import get_item_group_defaults
 from erpnext.stock.doctype.item.item import get_item_defaults
@@ -74,6 +75,7 @@ def make_purchase_order(
 	)
 
 	requested_qty = args.get("requested_qty") or {}
+	mapped_qty_by_item = get_qty_already_mapped(target_doc, "material_request_item", "stock_qty")
 
 	def postprocess(source, target_doc):
 		target_doc.is_subcontracted = is_subcontracted
@@ -90,7 +92,7 @@ def make_purchase_order(
 		filtered_items = args.get("filtered_children", [])
 		child_filter = d.name in filtered_items if filtered_items else True
 
-		qty = d.ordered_qty or d.received_qty
+		qty = (d.ordered_qty or d.received_qty) + flt(mapped_qty_by_item.get(d.name, 0))
 
 		return qty < d.stock_qty and child_filter
 
@@ -139,6 +141,15 @@ def make_purchase_order(
 
 @frappe.whitelist()
 def make_request_for_quotation(source_name: str, target_doc: str | dict | Document | None = None):
+	def update_item(obj, target, source_parent):
+		qty = obj.ordered_qty or obj.received_qty
+		target.qty = flt(flt(obj.stock_qty) - flt(qty)) / target.conversion_factor
+		target.stock_qty = target.qty * target.conversion_factor
+
+	def select_item(d):
+		qty = d.ordered_qty or d.received_qty
+		return qty < d.stock_qty
+
 	doclist = get_mapped_doc(
 		"Material Request",
 		source_name,
@@ -155,6 +166,8 @@ def make_request_for_quotation(source_name: str, target_doc: str | dict | Docume
 					["project", "project_name"],
 					["cost_center", "cost_center"],
 				],
+				"postprocess": update_item,
+				"condition": select_item,
 			},
 		},
 		target_doc,
@@ -286,51 +299,6 @@ def get_items_based_on_default_supplier(supplier: str):
 	]
 
 	return supplier_items
-
-
-@frappe.whitelist()
-def make_purchase_order_based_on_supplier(
-	source_name: str, target_doc: str | dict | Document | None = None, args: dict | None = None
-):
-	mr = source_name
-
-	supplier_items = get_items_based_on_default_supplier(args.get("supplier"))
-
-	def postprocess(source, target_doc):
-		target_doc.supplier = args.get("supplier")
-		if getdate(target_doc.schedule_date) < getdate(nowdate()):
-			target_doc.schedule_date = None
-		target_doc.set(
-			"items",
-			[d for d in target_doc.get("items") if d.get("item_code") in supplier_items and d.get("qty") > 0],
-		)
-
-		set_missing_values(source, target_doc)
-
-	target_doc = get_mapped_doc(
-		"Material Request",
-		mr,
-		{
-			"Material Request": {
-				"doctype": "Purchase Order",
-			},
-			"Material Request Item": {
-				"doctype": "Purchase Order Item",
-				"field_map": [
-					["name", "material_request_item"],
-					["parent", "material_request"],
-					["uom", "stock_uom"],
-					["uom", "uom"],
-				],
-				"postprocess": update_item,
-				"condition": lambda doc: doc.ordered_qty < doc.qty,
-			},
-		},
-		target_doc,
-		postprocess,
-	)
-
-	return target_doc
 
 
 @frappe.whitelist()
@@ -504,7 +472,8 @@ def create_pick_list(source_name: str, target_doc: str | dict | Document | None 
 		target_doc,
 	)
 
-	doc.set_item_locations()
+	if not doc.pick_manually:
+		doc.set_item_locations()
 
 	return doc
 

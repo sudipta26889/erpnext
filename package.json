@@ -15,7 +15,8 @@
     "postinstall": "cd banking && yarn install",
     "dev": "cd banking && yarn dev",
     "build": "cd banking && yarn build",
-    "build:ai": "cd ai && yarn install && yarn build"
+    "build:ai": "cd ai && yarn install && yarn build",
+    "test:js": "node --test \"erpnext/tests/js/**/*.test.mjs\""
   },
   "devDependencies": {},
   "dependencies": {

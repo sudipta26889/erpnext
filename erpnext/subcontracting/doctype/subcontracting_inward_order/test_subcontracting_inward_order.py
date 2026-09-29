@@ -169,6 +169,10 @@ class IntegrationTestSubcontractingInwardOrder(ERPNextTestSuite):
 		wo.submit()
 
 		manufacture = frappe.new_doc("Stock Entry").update(make_stock_entry_from_wo(wo.name, "Manufacture"))
+		self.assertEqual(
+			next(item.s_warehouse for item in manufacture.items if item.item_code == "Self RM"),
+			"Stores - _TC",
+		)
 		manufacture.save()
 		frappe.new_doc(
 			"Stock Entry Detail",
@@ -330,6 +334,36 @@ class IntegrationTestSubcontractingInwardOrder(ERPNextTestSuite):
 		self.assertEqual(scio.items[0].delivered_qty, 2)
 		self.assertEqual(scio.items[0].returned_qty, 1)
 
+	def test_process_loss_receipt_qty_for_multi_unit_bom(self):
+		new_bom = frappe.copy_doc(frappe.get_doc("BOM", "BOM-Basic FG Item-001"))
+		new_bom.quantity = 2
+		for item in new_bom.items:
+			item.qty = 2
+		new_bom.submit()
+		sc_bom = frappe.get_doc("Subcontracting BOM", {"finished_good": "Basic FG Item"})
+		sc_bom.finished_good_bom = new_bom.name
+		sc_bom.save()
+
+		so, scio = create_so_scio()
+		frappe.new_doc("Stock Entry").update(scio.make_rm_stock_entry_inward()).submit()
+
+		scio.reload()
+		wo = frappe.get_doc("Work Order", scio.make_work_order()[0])
+		wo.skip_transfer = 1
+		wo.required_items[-1].source_warehouse = "Stores - _TC"
+		wo.submit()
+
+		manufacture = frappe.new_doc("Stock Entry").update(make_stock_entry_from_wo(wo.name, "Manufacture"))
+		manufacture.save()
+		manufacture.process_loss_qty = 1
+		manufacture.items[-1].qty = 4
+		manufacture.submit()
+
+		scio.reload()
+		rm_in = scio.make_rm_stock_entry_inward()
+		for item in rm_in.get("items"):
+			self.assertEqual(item.qty, 1)
+
 	def test_manufacture_consumption_validates_against_work_order(self):
 		"""Cover the non-skip-transfer manufacture path, where consumption is validated
 		against the Work Order's transferred quantity (the Work Order branch of
@@ -451,7 +485,7 @@ class IntegrationTestSubcontractingInwardOrder(ERPNextTestSuite):
 
 		scio.reload()
 		si = make_sales_invoice(so.name)
-		self.assertEqual(len(si.items), 1)
+		self.assertEqual(len(si.items), 0)
 
 	def test_extra_items_reservation_transfer(self):
 		so, scio = create_so_scio()

@@ -1,7 +1,7 @@
 import frappe
 from frappe import _
 from frappe.query_builder.functions import Sum
-from frappe.utils import cstr, flt
+from frappe.utils import cstr, flt, get_link_to_form
 
 from .manufacturing import _check_bom_component_qty, get_bom_items
 from .stock_entry_base import BaseStockEntry
@@ -21,6 +21,46 @@ class BaseMaterialTransferStockEntry(BaseStockEntry):
 				frappe.throw(_("Target Warehouse is required for item {0}").format(row.item_code))
 			if not row.s_warehouse:
 				frappe.throw(_("Source Warehouse is required for item {0}").format(row.item_code))
+
+		self.validate_transit_warehouses()
+
+	def validate_transit_warehouses(self):
+		if not self.doc.add_to_transit:
+			return
+
+		target_warehouses = {row.t_warehouse for row in self.doc.items if row.t_warehouse}
+		if self.doc.to_warehouse:
+			target_warehouses.add(self.doc.to_warehouse)
+
+		if not target_warehouses:
+			return
+
+		transit_warehouses = set(
+			frappe.get_all(
+				"Warehouse",
+				filters={
+					"name": ("in", list(target_warehouses)),
+					"warehouse_type": "Transit",
+					"company": self.doc.company,
+				},
+				pluck="name",
+			)
+		)
+
+		if self.doc.to_warehouse and self.doc.to_warehouse not in transit_warehouses:
+			frappe.throw(
+				_(
+					"Default Target Warehouse {0} must be a Transit warehouse when Add to Transit is enabled."
+				).format(frappe.bold(self.doc.to_warehouse))
+			)
+
+		for row in self.doc.items:
+			if row.t_warehouse and row.t_warehouse not in transit_warehouses:
+				frappe.throw(
+					_(
+						"Row #{0}: Target Warehouse {1} must be a Transit warehouse when Add to Transit is enabled."
+					).format(row.idx, frappe.bold(row.t_warehouse))
+				)
 
 	def validate_same_source_target_warehouse(self):
 		"""
@@ -178,8 +218,20 @@ class MaterialTransferForManufactureStockEntry(BaseMaterialTransferStockEntry):
 
 	def validate(self):
 		self.validate_warehouse()
+		self.validate_work_order_status_for_return()
 		self.validate_component_and_quantities()
 		self.validate_same_source_target_warehouse()
+
+	def validate_work_order_status_for_return(self):
+		if not (self.doc.is_return and self.wo_doc) or self.wo_doc.status in ("Completed", "Closed"):
+			return
+
+		frappe.throw(
+			_("Components can be returned only after Work Order {0} is Completed or Closed").format(
+				get_link_to_form("Work Order", self.doc.work_order)
+			),
+			title=_("Work Order Not Finished"),
+		)
 
 	def validate_component_and_quantities(self):
 		if self.doc.fg_completed_qty:

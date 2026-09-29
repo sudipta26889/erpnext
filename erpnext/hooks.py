@@ -21,6 +21,23 @@ add_to_apps_screen = [
 	}
 ]
 
+# Modules that are a folder of code and nothing else. Their doctypes, reports and controllers stay
+# where they are; what they no longer own is navigation, which now sits in the sidebar named beside
+# each. Left in the dock, each would carry an entry of its own for two to four records. See
+# `frappe.utils.modules.get_code_only_modules`.
+#
+# The value names the modules that inherited that navigation, so a Call Log or a Code List resolves
+# to a sidebar the user can actually navigate to instead of dead-ending in a module the dock never
+# shows.
+code_only_modules = {
+	"Telephony": ["ERPNext Integrations"],
+	# Its one doctype, Communication Medium, describes how a call reaches someone, so it sits in
+	# the Telephony section beside the call settings rather than in a shell of its own.
+	"Communication": ["ERPNext Integrations"],
+	"EDI": ["Utilities"],
+	"Bulk Transaction": ["Utilities"],
+}
+
 develop_version = "17.x.x-develop"
 
 app_include_js = "erpnext.bundle.js"
@@ -79,6 +96,12 @@ after_migrate = ["erpnext.patches.v16_0.normalize_deprecated_timezone.execute"]
 
 after_app_install = "erpnext.setup.install.after_app_install"
 after_app_uninstall = "erpnext.setup.install.after_app_uninstall"
+
+# patches that must stop the migration when they fail, even with `bench migrate --skip-failing`
+never_skip_patches = [
+	"erpnext.patches.v16_0.update_serial_batch_entries",
+	"erpnext.patches.v16_0.move_sub_assembly_rate_setting_to_bom_item",
+]
 
 boot_session = "erpnext.startup.boot.boot_session"
 notification_config = "erpnext.startup.notifications.get_notification_config"
@@ -320,12 +343,14 @@ permission_query_conditions = {
 	"Item": "erpnext.stock.doctype.company_restriction.company_restriction.get_permission_query_conditions",
 	"Customer": "erpnext.stock.doctype.company_restriction.company_restriction.get_permission_query_conditions",
 	"Supplier": "erpnext.stock.doctype.company_restriction.company_restriction.get_permission_query_conditions",
+	"*": "erpnext.stock.doctype.company_restriction.company_restriction.get_inherited_permission_query_conditions",
 }
 
 has_permission = {
 	"Item": "erpnext.stock.doctype.company_restriction.company_restriction.has_permission",
 	"Customer": "erpnext.stock.doctype.company_restriction.company_restriction.has_permission",
 	"Supplier": "erpnext.stock.doctype.company_restriction.company_restriction.has_permission",
+	"*": "erpnext.stock.doctype.company_restriction.company_restriction.has_inherited_permission",
 }
 
 has_website_permission = {
@@ -363,13 +388,7 @@ period_closing_doctypes = [
 	"Subcontracting Receipt",
 ]
 
-pre_submit_validation_doctypes = [
-	"Sales Invoice",
-	"Purchase Invoice",
-	"Delivery Note",
-	"Purchase Receipt",
-	"Sales Order",
-]
+sqlite_search = ["erpnext.stock.doctype.item.item_search.ItemSearch"]
 
 # frappe core's ToDo.update_in_reference() raw-writes an `_assign` column on the referenced
 # doctype's own table; virtual doctypes (Project/Task, TaskPilot-backed) have no such table once
@@ -389,15 +408,8 @@ doc_events = {
 	tuple(period_closing_doctypes): {
 		"validate": "erpnext.accounts.doctype.accounting_period.accounting_period.validate_accounting_period_on_doc_save",
 	},
-	tuple(pre_submit_validation_doctypes): {
-		"validate": "erpnext.accounts.utils.pre_submit_validation",
-	},
 	("Item", "Customer", "Supplier"): {
 		"validate": "erpnext.stock.doctype.company_restriction.company_restriction.validate_allowed_companies",
-	},
-	"Stock Entry": {
-		"on_submit": "erpnext.stock.doctype.material_request.material_request.update_completed_and_requested_qty",
-		"on_cancel": "erpnext.stock.doctype.material_request.material_request.update_completed_and_requested_qty",
 	},
 	"User": {
 		"after_insert": "frappe.contacts.doctype.contact.contact.update_contact",
@@ -605,6 +617,7 @@ accounting_dimension_doctypes = [
 	"Purchase Taxes and Charges",
 	"Shipping Rule",
 	"Landed Cost Item",
+	"Landed Cost Taxes and Charges",
 	"Asset Value Adjustment",
 	"Asset Repair",
 	"Asset Capitalization",
@@ -666,16 +679,16 @@ regional_overrides = {
 		"erpnext.controllers.accounts_controller.validate_regional": "erpnext.regional.italy.utils.sales_invoice_validate",
 	},
 }
-user_privacy_documents = [
+user_data_fields = [
 	{
 		"doctype": "Lead",
-		"match_field": "email_id",
-		"personal_fields": ["phone", "mobile_no", "fax", "website", "lead_name"],
+		"filter_by": "email_id",
+		"redact_fields": ["phone", "mobile_no", "fax", "website", "lead_name"],
 	},
 	{
 		"doctype": "Opportunity",
-		"match_field": "contact_email",
-		"personal_fields": ["contact_mobile", "contact_display", "customer_name"],
+		"filter_by": "contact_email",
+		"redact_fields": ["contact_mobile", "contact_display", "customer_name"],
 	},
 ]
 
@@ -762,3 +775,12 @@ repost_allowed_doctypes = [
 	"Payment Entry",
 	"Purchase Receipt",
 ]
+
+
+# Data Import
+# -----------
+# Import a Customer or Supplier with its contacts and addresses in one file.
+data_import_providers = {
+	"Customer": "erpnext.utilities.party_import_provider.PartyImportProvider",
+	"Supplier": "erpnext.utilities.party_import_provider.PartyImportProvider",
+}
