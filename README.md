@@ -175,3 +175,10 @@ Please read our [Logo and Trademark Policy](TRADEMARK_POLICY.md).
 		</picture>
 	</a>
 </div>
+
+## Deployment
+
+Production no longer runs this fork. It runs stock `frappe/erpnext` plus the private app
+[ERPNext-TaskPilot](https://github.com/sudipta26889/ERPNext-TaskPilot) (`erpnext_taskpilot`). The live
+deployment folder is `ERPNext-TaskPilot/deploy/prod-docker`. The last fork build that ran in production is
+tagged `archive/fork-final`.
