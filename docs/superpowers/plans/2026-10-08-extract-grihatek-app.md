@@ -1,5 +1,7 @@
 # Extract the TaskPilot + AI customisations into a `grihatek` Frappe app — Implementation Plan
 
+> **Renamed 2026-10-08 (user decision):** the app is now **ERPNext-TaskPilot**: Frappe app / Python package `erpnext_taskpilot`, GitHub `sudipta26889/ERPNext-TaskPilot` (private). "grihatek" below is the working name used while the plan was written; every command in Tasks 9-10 has been updated to `erpnext_taskpilot`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Production runs **unmodified upstream `frappe/erpnext`** plus a separate app, `grihatek`, that carries every customisation. Upgrading ERPNext becomes "rebuild the image", with no merge and no conflicts.
@@ -130,7 +132,7 @@ class TestAppInstalled(IntegrationTestCase):
 ```
 - [ ] **Step 4: Run it on a fresh test site** (MariaDB container as in the 2026-09-29 test run). Expected: FAIL, because module `AI` currently belongs to `erpnext` in the fork.
 ```bash
-bench --site test.localhost install-app grihatek && bench --site test.localhost run-tests --module grihatek.taskpilot.tests.test_app_installed
+bench --site test.localhost install-app erpnext_taskpilot && bench --site test.localhost run-tests --module grihatek.taskpilot.tests.test_app_installed
 ```
 - [ ] **Step 5: This test stays red until Task 2 moves the AI module.** Commit the scaffold:
 ```bash
@@ -764,14 +766,14 @@ SELECT field, value FROM "tabSingles" WHERE doctype IN ('TaskPilot Settings','AI
 ```bash
 set -e   # final review C1: never reach migrate after a failed install-app
 # R3: hand module AI to grihatek first, so neither install-app nor the orphan reaper sees it as erpnext's
-psql -h 127.0.0.1 -U erpnext_db_user -d erpnext_staging -c "UPDATE \"tabModule Def\" SET app_name='grihatek' WHERE name='AI'"
+psql -h 127.0.0.1 -U erpnext_db_user -d erpnext_staging -c "UPDATE \"tabModule Def\" SET app_name='erpnext_taskpilot' WHERE name='AI'"
 bench --site erp.localhost set-maintenance-mode on
-bench --site erp.localhost install-app grihatek --force   # --force: Module Def AI already exists (C1)
+bench --site erp.localhost install-app erpnext_taskpilot --force   # --force: Module Def AI already exists (C1)
 bench --site erp.localhost migrate
 ```
   - Then check that `tabProject` and `tabTask` exist with every stock column (`ensure_stock_tables`), and that the `set_tasks_as_overdue` / `update_project_sales_billing` Scheduled Job Types are `stopped=1`.
   - Turn maintenance mode OFF before Step 5 (login and API calls fail under it), keeping `taskpilot_read_only` on. Start `frontend` and `websocket` for the smoke checks; `scheduler` and `queue-*` stay off. After Step 5, the Error Log must have zero "TaskPilot write refused (read-only)" rows: that is the proof of zero write attempts.
-- [ ] **Step 4: Compare after-counts** with Step 2's queries. **Go criteria:** every `tabAI*` row count identical; Singles for both settings identical; Sales Invoice project count identical; `Module Def` AI and TaskPilot both `app_name = grihatek`; the migrate log shows no `Orphaned DocType(s) found` entry naming an AI or TaskPilot doctype.
+- [ ] **Step 4: Compare after-counts** with Step 2's queries. **Go criteria:** every `tabAI*` row count identical; Singles for both settings identical; Sales Invoice project count identical; `Module Def` AI and TaskPilot both `app_name = erpnext_taskpilot`; the migrate log shows no `Orphaned DocType(s) found` entry naming an AI or TaskPilot doctype.
 - [ ] **Step 5: Smoke-test staging** with the production checks from 2026-09-29: ping 200; login 200; MCP `initialize`/`tools/list` (15 tools)/`get_company_context`; Project list and Task list return the REAL `for-ai` projects and tasks.
   - With `taskpilot_read_only` on, run both daily upstream jobs: `bench --site erp.localhost execute erpnext.projects.doctype.project.project.update_project_sales_billing` and `...task.task.set_tasks_as_overdue`. Neither may raise the read-only error; a raise would mean an attempted write.
   - Open and save, without changes, every Project and a sample of Tasks through `savedocs`. Zero write attempts.
@@ -785,9 +787,9 @@ bench --site erp.localhost migrate
 - [ ] **Step 2:** Use exactly the order Task 9 rehearsed.
   1. Set `taskpilot_read_only: 1` in the production site_config.
   2. Stop the `scheduler` and `queue-*` services (final review I1).
-  3. Run `UPDATE "tabModule Def" SET app_name='grihatek' WHERE name='AI'` on `erpnext_db`.
+  3. Run `UPDATE "tabModule Def" SET app_name='erpnext_taskpilot' WHERE name='AI'` on `erpnext_db`.
   4. Set `CUSTOM_TAG` to the new image and start ONLY `backend`.
-  5. Under `set -e`: `set-maintenance-mode on`, then `install-app grihatek --force`, then `migrate`.
+  5. Under `set -e`: `set-maintenance-mode on`, then `install-app erpnext_taskpilot --force`, then `migrate`.
   6. Turn maintenance mode OFF (login and API calls fail under it), but keep `taskpilot_read_only` on. Start `frontend` and `websocket` too; `scheduler` and `queue-*` stay off.
   7. Run the Task 9 checks, and confirm the Error Log has zero "TaskPilot write refused (read-only)" rows.
   8. Only then remove `taskpilot_read_only` (site-level: `bench --site erp.localhost set-config taskpilot_read_only 0`, not `-g`) and start every service.
