@@ -756,21 +756,38 @@ SELECT relname, n_live_tup FROM pg_stat_user_tables WHERE relname LIKE 'tabAI%' 
 SELECT count(*) FROM "tabSales Invoice" WHERE project IS NOT NULL AND project <> '';
 SELECT field, value FROM "tabSingles" WHERE doctype IN ('TaskPilot Settings','AI Settings') ORDER BY 1;
 ```
-- [ ] **Step 3: Run a staging stack** from the new image (`apps.json` = stock erpnext develop + grihatek + india-compliance). Point a copy of `prod-docker/compose.yaml` at DB `erpnext_staging`, use a different `HTTP_PUBLISH_PORT` and Redis DB numbers, and set TaskPilot Settings' workspace to the empty `erpnext` workspace, so a mistake can't write to `for-ai`. Then:
+- [ ] **Step 3: Run a staging stack** from the new image (`apps.json` = stock erpnext develop + grihatek + india-compliance; grihatek is a private repo, so the build-time copy of apps.json carries a token and the committed one doesn't).
+  - Point a copy of `prod-docker/compose.yaml` at DB `erpnext_staging`, with a different `HTTP_PUBLISH_PORT` and different Redis DB numbers.
+  - Copy production's `encryption_key` into the staging site_config so the stored TaskPilot `api_key` decrypts.
+  - Set `taskpilot_read_only: 1` in the staging site_config. (Final review I7: staging then uses the REAL `for-ai` workspace for reads, so it rehearses against real data, and any write attempt raises.)
+  - Start ONLY `backend` (no scheduler or queue workers; final review I1). Then:
 ```bash
+set -e   # final review C1: never reach migrate after a failed install-app
 # R3: hand module AI to grihatek first, so neither install-app nor the orphan reaper sees it as erpnext's
 psql -h 127.0.0.1 -U erpnext_db_user -d erpnext_staging -c "UPDATE \"tabModule Def\" SET app_name='grihatek' WHERE name='AI'"
-bench --site erp.localhost install-app grihatek   # BEFORE the first stock-erpnext migrate
+bench --site erp.localhost set-maintenance-mode on
+bench --site erp.localhost install-app grihatek --force   # --force: Module Def AI already exists (C1)
 bench --site erp.localhost migrate
 ```
+  - Then check that `tabProject` and `tabTask` exist with every stock column (`ensure_stock_tables`), and that the `set_tasks_as_overdue` / `update_project_sales_billing` Scheduled Job Types are `stopped=1`.
 - [ ] **Step 4: Compare after-counts** with Step 2's queries. **Go criteria:** every `tabAI*` row count identical; Singles for both settings identical; Sales Invoice project count identical; `Module Def` AI and TaskPilot both `app_name = grihatek`; the migrate log shows no `Orphaned DocType(s) found` entry naming an AI or TaskPilot doctype.
-- [ ] **Step 5: Smoke-test staging** with the production checks from 2026-09-29: ping 200; login 200; MCP `initialize`/`tools/list` (15 tools)/`get_company_context`; Project list and Task list return the workspace's projects; open, edit and save one Project (exactly 1 TaskPilot write); run `bench --site erp.localhost execute erpnext.projects.doctype.project.project.update_project_sales_billing` (0 writes, checked in TaskPilot's activity log).
+- [ ] **Step 5: Smoke-test staging** with the production checks from 2026-09-29: ping 200; login 200; MCP `initialize`/`tools/list` (15 tools)/`get_company_context`; Project list and Task list return the REAL `for-ai` projects and tasks.
+  - With `taskpilot_read_only` on, run both daily upstream jobs: `bench --site erp.localhost execute erpnext.projects.doctype.project.project.update_project_sales_billing` and `...task.task.set_tasks_as_overdue`. Neither may raise the read-only error; a raise would mean an attempted write.
+  - Open and save, without changes, every Project and a sample of Tasks through `savedocs`. Zero write attempts.
+  - Save a Timesheet with a task.
+  - Open the Projects workspace (number cards and charts must not error), and check that the AI button is on the rail and opens `ai-chat`.
 - [ ] **Step 6: Write `docs/cutover-rehearsal-YYYY-MM-DD.md`** with the numbers, then tear staging down (`dropdb erpnext_staging`, remove the containers). **No-go on any mismatch:** fix the cause in Tasks 2–6 and rehearse again.
 
 ### Task 10: Production cutover
 
 - [ ] **Step 1:** Announce a short maintenance window. Take the pre-cutover `pg_dump` (as on 2026-09-29) and keep the current image tag as the rollback.
-- [ ] **Step 2:** Run `UPDATE "tabModule Def" SET app_name='grihatek' WHERE name='AI'` on `erpnext_db`. Then set `CUSTOM_TAG` to the new image in `prod-docker/.env`, and run `docker compose up -d`, `bench --site erp.localhost install-app grihatek` and `bench --site erp.localhost migrate`, in exactly that order (the order Task 9 rehearsed). Restart the services.
+- [ ] **Step 2:** Use exactly the order Task 9 rehearsed.
+  1. Set `taskpilot_read_only: 1` in the production site_config.
+  2. Stop the `scheduler` and `queue-*` services (final review I1).
+  3. Run `UPDATE "tabModule Def" SET app_name='grihatek' WHERE name='AI'` on `erpnext_db`.
+  4. Set `CUSTOM_TAG` to the new image and start ONLY `backend`.
+  5. Under `set -e`: `set-maintenance-mode on`, then `install-app grihatek --force`, then `migrate`.
+  6. Run the Task 9 checks. Only then remove `taskpilot_read_only`, turn maintenance mode off, and start every service.
 - [ ] **Step 3:** Repeat Task 9 Steps 2, 4 and 5 against production, using the real `for-ai` workspace but no edit/save test there.
 - [ ] **Step 4 — Rollback if any check fails:** set `CUSTOM_TAG` back, `docker compose up -d`, then `pg_restore --clean -d erpnext_db <pre-cutover dump>`.
 - [ ] **Step 5:** Archive the fork. Tag `sudipta26889/erpnext` `archive/fork-final`, and update the README to point at `grihatek`. From now on an upgrade is: rebuild the image, test job (`run-tests --app grihatek` + the Task 8 guards), deploy.
