@@ -770,6 +770,7 @@ bench --site erp.localhost install-app grihatek --force   # --force: Module Def 
 bench --site erp.localhost migrate
 ```
   - Then check that `tabProject` and `tabTask` exist with every stock column (`ensure_stock_tables`), and that the `set_tasks_as_overdue` / `update_project_sales_billing` Scheduled Job Types are `stopped=1`.
+  - Turn maintenance mode OFF before Step 5 (login and API calls fail under it), keeping `taskpilot_read_only` on. Start `frontend` and `websocket` for the smoke checks; `scheduler` and `queue-*` stay off. After Step 5, the Error Log must have zero "TaskPilot write refused (read-only)" rows: that is the proof of zero write attempts.
 - [ ] **Step 4: Compare after-counts** with Step 2's queries. **Go criteria:** every `tabAI*` row count identical; Singles for both settings identical; Sales Invoice project count identical; `Module Def` AI and TaskPilot both `app_name = grihatek`; the migrate log shows no `Orphaned DocType(s) found` entry naming an AI or TaskPilot doctype.
 - [ ] **Step 5: Smoke-test staging** with the production checks from 2026-09-29: ping 200; login 200; MCP `initialize`/`tools/list` (15 tools)/`get_company_context`; Project list and Task list return the REAL `for-ai` projects and tasks.
   - With `taskpilot_read_only` on, run both daily upstream jobs: `bench --site erp.localhost execute erpnext.projects.doctype.project.project.update_project_sales_billing` and `...task.task.set_tasks_as_overdue`. Neither may raise the read-only error; a raise would mean an attempted write.
@@ -787,7 +788,9 @@ bench --site erp.localhost migrate
   3. Run `UPDATE "tabModule Def" SET app_name='grihatek' WHERE name='AI'` on `erpnext_db`.
   4. Set `CUSTOM_TAG` to the new image and start ONLY `backend`.
   5. Under `set -e`: `set-maintenance-mode on`, then `install-app grihatek --force`, then `migrate`.
-  6. Run the Task 9 checks. Only then remove `taskpilot_read_only`, turn maintenance mode off, and start every service.
+  6. Turn maintenance mode OFF (login and API calls fail under it), but keep `taskpilot_read_only` on. Start `frontend` and `websocket` too; `scheduler` and `queue-*` stay off.
+  7. Run the Task 9 checks, and confirm the Error Log has zero "TaskPilot write refused (read-only)" rows.
+  8. Only then remove `taskpilot_read_only` (site-level: `bench --site erp.localhost set-config taskpilot_read_only 0`, not `-g`) and start every service.
 - [ ] **Step 3:** Repeat Task 9 Steps 2, 4 and 5 against production, using the real `for-ai` workspace but no edit/save test there.
 - [ ] **Step 4 — Rollback if any check fails:** set `CUSTOM_TAG` back, `docker compose up -d`, then `pg_restore --clean -d erpnext_db <pre-cutover dump>`.
 - [ ] **Step 5:** Archive the fork. Tag `sudipta26889/erpnext` `archive/fork-final`, and update the README to point at `grihatek`. From now on an upgrade is: rebuild the image, test job (`run-tests --app grihatek` + the Task 8 guards), deploy.
