@@ -262,7 +262,7 @@ class TestPurchaseInvoice(ERPNextTestSuite, StockTestMixin):
 		supplier.on_hold = 0
 		supplier.save()
 
-	def test_purchase_invoice_for_blocked_supplier_payment_today_date(self):
+	def test_purchase_invoice_for_supplier_released_today(self):
 		supplier = frappe.get_doc("Supplier", "_Test Supplier")
 		supplier.on_hold = 1
 		supplier.hold_type = "Payments"
@@ -271,13 +271,8 @@ class TestPurchaseInvoice(ERPNextTestSuite, StockTestMixin):
 
 		pi = make_purchase_invoice()
 
-		self.assertRaises(
-			frappe.ValidationError,
-			get_payment_entry,
-			dt="Purchase Invoice",
-			dn=pi.name,
-			bank_account="_Test Bank - _TC",
-		)
+		pe = get_payment_entry(dt="Purchase Invoice", dn=pi.name, bank_account="_Test Bank - _TC")
+		self.assertEqual(pe.party, supplier.name)
 
 		supplier.on_hold = 0
 		supplier.save()
@@ -679,6 +674,41 @@ class TestPurchaseInvoice(ERPNextTestSuite, StockTestMixin):
 		self.assertFalse(
 			frappe.db.exists("GL Entry", {"account": exchange_gain_loss_account, "voucher_no": pi.name})
 		)
+
+	@ERPNextTestSuite.change_settings(
+		"Buying Settings",
+		{"use_transaction_date_exchange_rate": 1, "set_landed_cost_based_on_purchase_invoice_rate": 0},
+	)
+	def test_transaction_date_exchange_rate_applies_only_when_mapping_from_purchase_order(self):
+		from erpnext.stock.doctype.purchase_receipt.mapper import (
+			make_purchase_invoice as create_purchase_invoice,
+		)
+
+		pr = make_purchase_receipt(
+			company="_Test Company with perpetual inventory",
+			warehouse="Stores - TCP1",
+			currency="USD",
+			conversion_rate=70,
+		)
+		pi = create_purchase_invoice(pr.name)
+		pi.credit_to = "_Test Payable USD - TCP1"
+		pi.insert()
+		self.assertEqual(pi.conversion_rate, 70)
+
+		po = create_purchase_order(supplier="_Test Supplier USD", currency="USD")
+		pi = make_pi_from_po(po.name)
+		self.assertTrue(pi.use_transaction_date_exchange_rate)
+		pi.conversion_rate = 75
+		pi.credit_to = "_Test Payable USD - _TC"
+		pi.insert()
+		self.assertEqual(pi.conversion_rate, 75)
+
+	@ERPNextTestSuite.change_settings("Buying Settings", {"pr_required": "Yes"})
+	def test_purchase_receipt_not_required_when_invoice_updates_stock(self):
+		self.assertRaises(frappe.ValidationError, make_purchase_invoice)
+
+		pi = make_purchase_invoice(update_stock=1)
+		self.assertEqual(pi.docstatus, 1)
 
 	def test_purchase_invoice_change_naming_series(self):
 		pi = frappe.copy_doc(self.globalTestRecords["Purchase Invoice"][1])
@@ -3289,7 +3319,7 @@ class TestPurchaseInvoice(ERPNextTestSuite, StockTestMixin):
 		batch_no = "BATCH-PI-BNU-TPRBI-0001"
 		serial_nos = ["SNU-PI-TPRSI-0001", "SNU-PI-TPRSI-0002", "SNU-PI-TPRSI-0003"]
 
-		if not frappe.db.exists("Batch", batch_no):
+		if not frappe.db.exists("Batch", {"item": batch_item, "batch_id": batch_no}):
 			frappe.get_doc(
 				{
 					"doctype": "Batch",
@@ -3297,6 +3327,7 @@ class TestPurchaseInvoice(ERPNextTestSuite, StockTestMixin):
 					"item": batch_item,
 				}
 			).insert()
+		batch_no = frappe.db.get_value("Batch", {"item": batch_item, "batch_id": batch_no}, "name")
 
 		for serial_no in serial_nos:
 			if not frappe.db.exists("Serial No", serial_no):

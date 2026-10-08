@@ -147,6 +147,7 @@ class PurchaseReceipt(BuyingController):
 		total_qty: DF.Float
 		total_taxes_and_charges: DF.Currency
 		transporter_name: DF.Data | None
+		use_transaction_date_exchange_rate: DF.Check
 	# end: auto-generated types
 
 	def __init__(self, *args, **kwargs):
@@ -313,6 +314,7 @@ class PurchaseReceipt(BuyingController):
 	def po_required(self):
 		if (
 			frappe.db.get_single_value("Buying Settings", "po_required") == "Yes"
+			and not self.is_return
 			and not self.is_internal_transfer()
 		):
 			for d in self.get("items"):
